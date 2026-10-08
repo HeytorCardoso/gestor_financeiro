@@ -8,7 +8,8 @@ Lê novas notificações do Nubank (`com.nu.production`) usando o `NotificationL
 2. Abra **Captura → Gerenciar acesso no Android → Abrir configurações**.
 3. Autorize o **Finna** no acesso às notificações e volte ao app.
 4. Aguarde uma nova notificação real do Nubank. O serviço funciona sem a tela do app aberta, desde que o Android mantenha o acesso e o serviço habilitados.
-5. Confira o extrato. Mensagens desconhecidas aparecem em **Aguardando revisão**, onde podem ser preenchidas manualmente ou ignoradas. Toque nos lançamentos reconhecidos para categorizar.
+5. Confira o extrato: os lançamentos entram automaticamente, sem aprovação. Toque em qualquer lançamento para editar descrição, valor, tipo, categoria e observações em um painel deslizante. A notificação original permanece disponível para consulta.
+6. Notificações sem dados reconhecidos também aparecem no extrato, com a indicação **Sem valor**. Complementá-las é opcional; entram nos totais somente quando um valor é informado.
 
 É possível pausar a captura sem revogar a autorização. Notificações recebidas durante a pausa não são importadas posteriormente. O app começa vazio, não importa notificações antigas e não mistura dados simulados com reais. Planejamento ainda contém metas e limites ilustrativos.
 
@@ -21,13 +22,13 @@ Os quatro formatos foram fornecidos pelo usuário, não confirmados em aparelho 
 - `Você recebeu R$ 10,00 de Ana via Pix.`
 - `O pagamento do seu boleto no valor de R$ 99,00 foi realizado com sucesso.`
 
-São aceitos separadores de milhar, variação de maiúsculas e espaços. Textos ambíguos, compras recusadas, conteúdo oculto e formatos diferentes ficam pendentes e não entram nos totais. O horário armazenado é o da notificação recebida pelo Android, não uma confirmação da data contábil da transação.
+São aceitos separadores de milhar, variação de maiúsculas e espaços. Textos ambíguos, compras recusadas, conteúdo oculto e formatos diferentes são registrados como incompletos no extrato e não entram nos totais. O horário armazenado é o da notificação recebida pelo Android, não uma confirmação da data contábil da transação.
 
 ## Armazenamento e limites
 
-SQLite privado salva texto, descrição, centavos, categoria, horário e identidade da notificação. Backups e transferências automáticas desses dados estão excluídos. A autorização Android dá acesso amplo às notificações, mas o serviço retorna imediatamente para aplicativos diferentes do Nubank.
+SQLite privado salva texto, descrição, centavos, categoria, observações, horário e identidade da notificação. Backups e transferências automáticas desses dados estão excluídos. A autorização Android dá acesso amplo às notificações, mas o serviço retorna imediatamente para aplicativos diferentes do Nubank.
 
-A identidade da notificação e seu horário de evento impedem a reimportação do mesmo evento. Atualizações de uma notificação pendente podem completar seu conteúdo. Notificações distintas referentes à mesma transação não podem ser deduplicadas com certeza sem identificador bancário; revise pagamentos de fatura e compras para evitar dupla contagem. Se o banco reutilizar a mesma identidade e horário para transações diferentes, a segunda não será importada automaticamente.
+A identidade da notificação e seu horário de evento impedem a reimportação do mesmo evento. Atualizações de uma notificação incompleta podem completar seu conteúdo automaticamente, desde que o usuário ainda não a tenha editado. Alterações manuais são preservadas. Notificações distintas referentes à mesma transação não podem ser deduplicadas com certeza sem identificador bancário; revise pagamentos de fatura e compras para evitar dupla contagem. Se o banco reutilizar a mesma identidade e horário para transações diferentes, a segunda não será importada automaticamente.
 
 Não é possível obter valores que o sistema ou o Nubank ocultem. O resultado exibido representa entradas menos saídas reconhecidas, não o saldo bancário. Reinício forçado, restrições de bateria e políticas do aparelho podem interromper o serviço; confira o status e o acesso nas configurações. Em instalações externas, alguns aparelhos exigem liberar configurações restritas antes de habilitar o acesso às notificações.
 
@@ -51,3 +52,5 @@ Referência: https://developer.android.com/reference/android/service/notificatio
 ## Validação nesta implementação
 
 O código Java principal e os novos testes compilaram diretamente com `javac` e as bibliotecas Android disponíveis. Os 5 testes unitários do extrator passaram com JUnit. O build Gradle foi bloqueado pelo ambiente ao inicializar os sockets de coordenação (`Could not determine a usable wildcard IP`), portanto o APK e o teste instrumentado ainda precisam ser validados no Android Studio/aparelho. A captura real com Nubank ainda não foi exercitada neste ambiente.
+
+O banco foi atualizado para a versão 2 com migração que preserva os lançamentos existentes e adiciona observações e proteção das edições manuais. Os formulários usam painéis deslizantes Material, campos contornados e as cores do app. A validação de edição e migração em dispositivo ainda requer o teste instrumentado.

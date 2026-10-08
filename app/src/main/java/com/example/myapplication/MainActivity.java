@@ -9,7 +9,6 @@ import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
-import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Locale;
@@ -73,12 +72,18 @@ public class MainActivity extends AppCompatActivity {
         return NubankNotificationService.connected ? "Captura ativa · Nubank" : "Acesso autorizado · Aguardando conexão";
     }
     private void openPermission() {
-        new MaterialAlertDialogBuilder(this).setTitle("Autorizar leitura de notificações")
-            .setMessage("O Android concede acesso às notificações do aparelho. O Finna filtra apenas o Nubank e armazena o texto localmente para organizar e revisar lançamentos. Nenhum dado é enviado ao banco ou a servidores. Na próxima tela, habilite o Finna. Você pode revogar o acesso a qualquer momento.")
-            .setNegativeButton("Cancelar", null).setPositiveButton("Abrir configurações", (d, w) -> {
-                try { startActivity(new android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
-                catch (android.content.ActivityNotFoundException ex) { Toast.makeText(this, "Configuração indisponível neste aparelho", Toast.LENGTH_LONG).show(); }
-            }).show();
+        com.google.android.material.bottomsheet.BottomSheetDialog dialog = new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        LinearLayout panel = card(background);
+        panel.addView(text("Organização no automático", 24, ink, true)); space(panel, 12);
+        panel.addView(text("Autorize a leitura de notificações", 16, green, true)); space(panel, 12);
+        panel.addView(text("O Android concede acesso às notificações do aparelho. O Finna filtra apenas o Nubank e salva os dados neste aparelho, sem envio ao banco ou a servidores.\n\nNa próxima tela, habilite o Finna. Você pode revogar o acesso quando quiser.", 15, muted, false));
+        space(panel, 24); button(panel, "Abrir configurações do Android", () -> {
+            dialog.dismiss();
+            try { startActivity(new android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
+            catch (android.content.ActivityNotFoundException ex) { Toast.makeText(this, "Configuração indisponível neste aparelho", Toast.LENGTH_LONG).show(); }
+        });
+        space(panel, 8); TextView cancel = text("Agora não", 14, green, true); cancel.setGravity(Gravity.CENTER); cancel.setPadding(0, dp(16), 0, dp(16)); panel.addView(cancel); cancel.setOnClickListener(v -> dialog.dismiss());
+        ScrollView scroll = new ScrollView(this); scroll.addView(panel); dialog.setContentView(scroll); dialog.show();
     }
 
     private void render() {
@@ -138,7 +143,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void statement() {
-        title("Movimentações", "Notificações capturadas · Toque para revisar.");
+        title("Movimentações", "Notificações capturadas · Toque para editar.");
         LinearLayout tabs = row();
         for (String option : new String[]{"Todas", "Receitas", "Despesas"}) {
             TextView tab = text(option, 13, filter.equals(option) ? Color.WHITE : green, true); tab.setGravity(Gravity.CENTER); tab.setBackground(shape(filter.equals(option) ? green : 0xffe5eee5, 16)); tab.setPadding(dp(8), dp(14), dp(8), dp(14));
@@ -150,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
         int count = 0;
         for (Entry e : entries) if (filter.equals("Todas") || (filter.equals("Receitas") && e.value > 0) || (filter.equals("Despesas") && e.value < 0)) { transaction(list, e); count++; }
         if (count == 0) list.addView(text("Nenhuma movimentação por aqui.", 14, muted, false));
-        space(content, 20); pendingNotifications();
+        space(content, 20);
     }
 
     private void planning() {
@@ -173,7 +178,7 @@ public class MainActivity extends AppCompatActivity {
     private void captureStatus() {
         LinearLayout status = card(0xffeee7f7); content.addView(status);
         status.addView(text(captureState(), 15, 0xff7534a6, true)); space(status, 8);
-        status.addView(text(store.records(true).size() + " notificações aguardam revisão", 12, muted, false));
+        status.addView(text(store.records(true).size() + " lançamentos com dados incompletos", 12, muted, false));
         space(status, 8); button(status, "Configurar captura", () -> go("Captura")); space(content, 18);
     }
     private void profile() {
@@ -188,46 +193,75 @@ public class MainActivity extends AppCompatActivity {
         button(details, paused ? "Retomar captura" : "Pausar captura", () -> {
             getSharedPreferences("capture", MODE_PRIVATE).edit().putBoolean("paused", !paused).apply();
         });
-        space(content, 20); pendingNotifications();
-        space(content, 12); content.addView(text("Compras recusadas, conteúdo oculto e formatos desconhecidos exigem revisão. A captura depende de o Android disponibilizar a notificação; pagamentos e compras podem representar o mesmo gasto, revise antes de somar.", 12, muted, false));
+        space(content, 20);
+        space(content, 12); content.addView(text("Lançamentos reconhecidos entram automaticamente. Notificações sem dados suficientes aparecem no extrato como incompletas e ficam fora dos totais até você informar o valor. A captura depende de o Android disponibilizar a notificação; pagamentos e compras podem representar o mesmo gasto, revise antes de somar.", 12, muted, false));
     }
-    private void pendingNotifications() {
-        section("Aguardando revisão", "Nubank");
-        java.util.ArrayList<CaptureStore.Record> pending = store.records(true);
-        if (pending.isEmpty()) { content.addView(text("Nenhuma notificação pendente.", 14, muted, false)); return; }
-        for (CaptureStore.Record r : pending) {
-            LinearLayout box = card(Color.WHITE); content.addView(box);
-            box.addView(text(r.raw, 14, ink, false)); space(box, 12);
-            button(box, "Revisar lançamento", () -> resolve(r)); space(content, 12);
-        }
-    }
-    private void resolve(CaptureStore.Record r) {
-        LinearLayout form = column(); form.setPadding(dp(24), dp(8), dp(24), 0);
-        EditText name = new EditText(this); name.setHint("Descrição"); form.addView(name);
-        EditText value = new EditText(this); value.setHint("Valor em reais (ex.: 39,90)"); value.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL); form.addView(value);
-        Spinner type = new Spinner(this); type.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{"Despesa", "Receita"})); form.addView(type);
-        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle("Revisar notificação").setView(form)
-            .setNegativeButton("Cancelar", null).setNeutralButton("Ignorar", (d, w) -> { store.discard(r.id); render(); }).setPositiveButton("Salvar", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(-1).setOnClickListener(v -> {
-            if (name.getText().toString().trim().isEmpty()) { name.setError("Informe a descrição"); return; }
-            try {
-                long cents = new java.math.BigDecimal(value.getText().toString().replace(',', '.')).movePointRight(2).longValueExact();
-                if (cents <= 0) throw new ArithmeticException();
-                store.resolve(r.id, name.getText().toString().trim(), type.getSelectedItemPosition() == 0 ? -cents : cents, "Outros");
-                loadEntries(); dialog.dismiss(); render();
-            } catch (NumberFormatException | ArithmeticException ex) { value.setError("Informe um valor positivo com até 2 casas decimais"); }
-        })); dialog.show();
-    }
+    private void review(Entry entry) { editEntry(entry.record); }
 
-    private void review(Entry entry) {
-        String[] categories = {"Alimentação", "Casa", "Mobilidade", "Trabalho", "Outros"};
-        new MaterialAlertDialogBuilder(this).setTitle("Revisar categoria")
-            .setItems(categories, (d, which) -> {
-                int index = entries.indexOf(entry);
-                if (index >= 0) store.categorize(entry.id, categories[which]);
-                loadEntries();
-                render();
-            }).setNegativeButton("Cancelar", null).show();
+    private com.google.android.material.textfield.TextInputLayout field(LinearLayout parent, String label) {
+        com.google.android.material.textfield.TextInputLayout field = new com.google.android.material.textfield.TextInputLayout(this);
+        field.setBoxBackgroundMode(com.google.android.material.textfield.TextInputLayout.BOX_BACKGROUND_OUTLINE);
+        field.setHint(label); field.setBoxCornerRadii(dp(14), dp(14), dp(14), dp(14));
+        field.setBoxStrokeColor(green); field.setDefaultHintTextColor(android.content.res.ColorStateList.valueOf(muted));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(8), 0, dp(8)); parent.addView(field, lp);
+        return field;
+    }
+    private com.google.android.material.textfield.TextInputEditText input(LinearLayout parent, String label, String value, int type) {
+        com.google.android.material.textfield.TextInputLayout box = field(parent, label);
+        com.google.android.material.textfield.TextInputEditText input = new com.google.android.material.textfield.TextInputEditText(box.getContext());
+        input.setTextColor(ink); input.setTextSize(16); input.setInputType(type); input.setText(value); box.addView(input); return input;
+    }
+    private com.google.android.material.textfield.MaterialAutoCompleteTextView dropdown(LinearLayout parent, String label, String selected, String[] options) {
+        com.google.android.material.textfield.TextInputLayout box = field(parent, label);
+        box.setEndIconMode(com.google.android.material.textfield.TextInputLayout.END_ICON_DROPDOWN_MENU);
+        com.google.android.material.textfield.MaterialAutoCompleteTextView input = new com.google.android.material.textfield.MaterialAutoCompleteTextView(box.getContext());
+        input.setInputType(0); input.setTextColor(ink); input.setTextSize(16);
+        input.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_dropdown_item_1line, options));
+        input.setText(selected, false); box.addView(input); input.setOnClickListener(v -> input.showDropDown()); return input;
+    }
+    private void editEntry(CaptureStore.Record r) {
+        com.google.android.material.bottomsheet.BottomSheetDialog dialog = new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
+        LinearLayout form = column(); form.setPadding(dp(24), dp(12), dp(24), dp(28)); form.setBackground(shape(background, 26)); scroll.addView(form);
+        TextView handle = text("━━━━", 18, 0xffcbd6cb, true); handle.setGravity(Gravity.CENTER); form.addView(handle);
+        space(form, 12); form.addView(text("Detalhes do lançamento", 24, ink, true)); space(form, 6);
+        form.addView(text("Já está no seu extrato. Edite quando quiser.", 13, muted, false)); space(form, 14);
+        LinearLayout source = card(0xffe8f1e8); form.addView(source);
+        source.addView(text("NUBANK · CAPTURADO AUTOMATICAMENTE", 11, green, true)); space(source, 6);
+        source.addView(text(java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(r.time)), 12, muted, false));
+        if (r.incomplete) { space(source, 8); source.addView(text("Dados incompletos. Informe o valor para incluir nos totais.", 13, ink, false)); }
+        space(form, 16);
+        int plain = android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
+        com.google.android.material.textfield.TextInputEditText name = input(form, "Descrição", r.name, plain);
+        com.google.android.material.textfield.TextInputEditText value = input(form, "Valor (R$)", r.cents == 0 ? "" : java.math.BigDecimal.valueOf(r.cents).abs().movePointLeft(2).toPlainString().replace('.', ','), android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        com.google.android.material.textfield.MaterialAutoCompleteTextView type = dropdown(form, "Tipo", r.cents > 0 ? "Receita" : "Despesa", new String[]{"Despesa", "Receita"});
+        com.google.android.material.textfield.MaterialAutoCompleteTextView category = dropdown(form, "Categoria", r.category, new String[]{"Alimentação", "Casa", "Mobilidade", "Trabalho", "Saúde", "Lazer", "Outros"});
+        com.google.android.material.textfield.TextInputEditText notes = input(form, "Observações (opcional)", r.notes, plain | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE); notes.setMinLines(2);
+        space(form, 12); LinearLayout original = card(Color.WHITE); form.addView(original);
+        original.addView(text("Notificação original", 13, green, true)); space(original, 8); original.addView(text(r.raw, 13, muted, false));
+        space(form, 20); button(form, "Salvar alterações", () -> {
+            if (name.getText().toString().trim().isEmpty()) { name.setError("Informe uma descrição"); name.requestFocus(); return; }
+            try {
+                String entered = value.getText().toString().trim();
+                long cents = entered.isEmpty() && r.incomplete ? 0 : new java.math.BigDecimal(entered.replace(',', '.')).movePointRight(2).longValueExact();
+                if (cents < 0 || (cents == 0 && !r.incomplete)) throw new ArithmeticException();
+                store.edit(r.id, name.getText().toString().trim(), type.getText().toString().equals("Receita") ? cents : -cents, category.getText().toString(), notes.getText().toString().trim());
+                loadEntries(); dialog.dismiss(); render(); Toast.makeText(this, "Alterações salvas", Toast.LENGTH_SHORT).show();
+            } catch (NumberFormatException | ArithmeticException ex) { value.setError("Use um valor positivo com até 2 casas decimais"); value.requestFocus(); }
+        });
+        space(form, 8); TextView cancel = text("Voltar sem alterar", 14, green, true); cancel.setGravity(Gravity.CENTER); cancel.setPadding(0, dp(16), 0, dp(16)); form.addView(cancel); cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.setContentView(scroll);
+        dialog.setOnShowListener(d -> {
+            android.view.View sheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
+            if (sheet != null) {
+                sheet.setBackground(shape(background, 26));
+                com.google.android.material.bottomsheet.BottomSheetBehavior<android.view.View> behavior = com.google.android.material.bottomsheet.BottomSheetBehavior.from(sheet);
+                behavior.setState(com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED);
+                behavior.setSkipCollapsed(true);
+            }
+            if (dialog.getWindow() != null) dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        });
+        dialog.show();
     }
 
     private double total(boolean income) { double sum = 0; for (Entry e : entries) if ((e.value > 0) == income) sum += Math.abs(e.value); return sum; }
@@ -236,7 +270,7 @@ public class MainActivity extends AppCompatActivity {
     private void title(String heading, String subtitle) { content.addView(text(heading, 27, ink, true)); space(content, 6); content.addView(text(subtitle, 14, muted, false)); space(content, 22); }
     private TextView section(String heading, String action) { LinearLayout line = row(); line.addView(text(heading, 17, ink, true), new LinearLayout.LayoutParams(0, -2, 1)); TextView link = text(action, 12, green, true); link.setPadding(dp(8), dp(12), 0, dp(12)); line.addView(link); content.addView(line); space(content, 8); return link; }
     private LinearLayout metric(String label, double amount, int color) { LinearLayout box = card(Color.WHITE); box.addView(text(label, 13, color, true)); space(box, 8); box.addView(text(hidden ? "••••" : money.format(amount), 19, ink, true)); return box; }
-    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.category, 11, muted, false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value)), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
+    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.record.incomplete ? "?" : e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.category, 11, muted, false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.record.incomplete ? "Sem valor" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value))), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
     private void category(LinearLayout box, String name, double amount, int color) { LinearLayout line = row(); line.addView(text(name, 14, ink, false), new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : money.format(amount), 13, muted, true)); box.addView(line); progress(box, total(false) == 0 ? 0 : (int)(amount / total(false) * 100), color); }
     private void budget(LinearLayout box, String name, double spent, double limit) { box.addView(text(name, 15, ink, true)); space(box, 6); box.addView(text(money.format(spent) + " de " + money.format(limit), 13, muted, false)); progress(box, (int)(spent / limit * 100), spent > limit ? 0xffbd674e : green); }
     private void progress(LinearLayout box, int percent, int color) { ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setMax(100); bar.setProgress(Math.min(percent, 100)); bar.setProgressTintList(android.content.res.ColorStateList.valueOf(color)); bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffe9eee7)); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(8)); lp.setMargins(0, dp(12), 0, dp(18)); box.addView(bar, lp); }
@@ -249,10 +283,10 @@ public class MainActivity extends AppCompatActivity {
     private void space(LinearLayout parent, int height) { parent.addView(new Space(this), new LinearLayout.LayoutParams(1, dp(height))); }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private static class Entry {
-        final long id; final String name, category; final double value;
+        final long id; final String name, category; final double value; final CaptureStore.Record record;
         Entry(CaptureStore.Record r) {
-            id = r.id; name = r.name; value = r.cents / 100.0;
-            category = r.category + " · " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, new Locale("pt", "BR")).format(new java.util.Date(r.time));
+            record = r; id = r.id; name = r.name; value = r.cents / 100.0;
+            category = (r.incomplete ? "Dados incompletos" : r.category) + " · " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, new Locale("pt", "BR")).format(new java.util.Date(r.time));
         }
     }
 }
