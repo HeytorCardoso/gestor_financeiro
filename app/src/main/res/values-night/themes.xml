@@ -1,0 +1,4 @@
+<resources>
+    <!-- O protótipo mantém a identidade clara também no modo noturno do aparelho. -->
+    <style name="Theme.MyApplication" parent="Base.Theme.MyApplication" />
+</resources>
