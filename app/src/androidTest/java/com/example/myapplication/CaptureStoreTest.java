@@ -42,6 +42,15 @@ public class CaptureStoreTest {
             assertEquals("Conferir depois", store.records(false).get(0).notes);
             assertTrue(store.records(false).get(0).incomplete);
         }
+        try (CaptureStore store = new CaptureStore(isolated)) {
+            store.capture("event-reprocess", "Compra aprovada\nR$ 15,00 em Padaria", 4, null, "Nubank");
+            store.reprocessIncomplete();
+            assertEquals(-1500, store.records(false).get(0).cents);
+            long deleted = store.records(false).get(0).id;
+            store.discard(deleted);
+            assertFalse(store.capture("event-reprocess", "Compra aprovada\nR$ 15,00 em Padaria", 4));
+            assertEquals(3, store.records(false).size());
+        }
         try (CaptureStore reopened = new CaptureStore(isolated)) { assertEquals(3, reopened.records(false).size()); assertEquals("Conferir depois", reopened.records(false).get(0).notes); }
     }
 }

@@ -42,6 +42,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         getSharedPreferences("capture", MODE_PRIVATE).registerOnSharedPreferenceChangeListener(settingsListener);
+        store.reprocessIncomplete();
         loadEntries(); render();
         refreshHandler.post(refresh);
     }
@@ -69,14 +70,14 @@ public class MainActivity extends AppCompatActivity {
     private String captureState() {
         if (!authorized()) return "Acesso às notificações desativado";
         if (getSharedPreferences("capture", MODE_PRIVATE).getBoolean("paused", false)) return "Captura pausada";
-        return NubankNotificationService.connected ? "Captura ativa · Nubank" : "Acesso autorizado · Aguardando conexão";
+        return NubankNotificationService.connected ? "Captura ativa · Nubank + Gmail" : "Acesso autorizado · Aguardando conexão";
     }
     private void openPermission() {
         com.google.android.material.bottomsheet.BottomSheetDialog dialog = new com.google.android.material.bottomsheet.BottomSheetDialog(this);
         LinearLayout panel = card(background);
         panel.addView(text("Organização no automático", 24, ink, true)); space(panel, 12);
         panel.addView(text("Autorize a leitura de notificações", 16, green, true)); space(panel, 12);
-        panel.addView(text("O Android concede acesso às notificações do aparelho. O Finna filtra apenas o Nubank e salva os dados neste aparelho, sem envio ao banco ou a servidores.\n\nNa próxima tela, habilite o Finna. Você pode revogar o acesso quando quiser.", 15, muted, false));
+        panel.addView(text("O Android concede acesso às notificações do aparelho. O Finna filtra notificações do Nubank e avisos de transferência enviada do Nubank no Gmail, e salva os dados neste aparelho, sem envio ao banco ou a servidores.\n\nNa próxima tela, habilite o Finna. Você pode revogar o acesso quando quiser.", 15, muted, false));
         space(panel, 24); button(panel, "Abrir configurações do Android", () -> {
             dialog.dismiss();
             try { startActivity(new android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
@@ -182,11 +183,11 @@ public class MainActivity extends AppCompatActivity {
         space(status, 8); button(status, "Configurar captura", () -> go("Captura")); space(content, 18);
     }
     private void profile() {
-        title("Captura automática", "Leitura local das notificações do Nubank.");
+        title("Captura automática", "Nubank e transferências enviadas pelo Gmail.");
         captureStatus();
         LinearLayout details = card(Color.WHITE); content.addView(details);
         details.addView(text("Como funciona", 19, ink, true)); space(details, 12);
-        details.addView(text("Autorize o Finna nas configurações do Android. Novas notificações de compras, Pix e boletos são analisadas automaticamente, mesmo com a tela do app fechada.\n\nNão há acesso à conta, senha ou conexão com o banco. Os lançamentos ficam salvos neste aparelho. O histórico anterior à autorização não é importado.", 14, ink, false));
+        details.addView(text("Autorize o Finna nas configurações do Android. Notificações do Nubank e e-mails do Nubank no Gmail sobre transferências enviadas são analisados automaticamente, mesmo com a tela do app fechada.\n\nNão há acesso à conta, senha ou conexão com o banco. Os lançamentos ficam salvos neste aparelho. O histórico anterior à autorização não é importado.", 14, ink, false));
         space(details, 16); button(details, "Gerenciar acesso no Android", this::openPermission);
         space(details, 12);
         boolean paused = getSharedPreferences("capture", MODE_PRIVATE).getBoolean("paused", false);
@@ -194,6 +195,9 @@ public class MainActivity extends AppCompatActivity {
             getSharedPreferences("capture", MODE_PRIVATE).edit().putBoolean("paused", !paused).apply();
         });
         space(content, 20);
+        LinearLayout gmail = card(Color.WHITE); content.addView(gmail);
+        gmail.addView(text("Notificações do Gmail", 17, ink, true)); space(gmail, 8);
+        gmail.addView(text(getSharedPreferences("capture", MODE_PRIVATE).getString("gmailStatus", "Ainda não foi recebida uma notificação do Gmail. Confira se os avisos desses e-mails estão ativados no Gmail."), 13, muted, false));
         space(content, 12); content.addView(text("Lançamentos reconhecidos entram automaticamente. Notificações sem dados suficientes aparecem no extrato como incompletas e ficam fora dos totais até você informar o valor. A captura depende de o Android disponibilizar a notificação; pagamentos e compras podem representar o mesmo gasto, revise antes de somar.", 12, muted, false));
     }
     private void review(Entry entry) { editEntry(entry.record); }
@@ -227,7 +231,7 @@ public class MainActivity extends AppCompatActivity {
         space(form, 12); form.addView(text("Detalhes do lançamento", 24, ink, true)); space(form, 6);
         form.addView(text("Já está no seu extrato. Edite quando quiser.", 13, muted, false)); space(form, 14);
         LinearLayout source = card(0xffe8f1e8); form.addView(source);
-        source.addView(text("NUBANK · CAPTURADO AUTOMATICAMENTE", 11, green, true)); space(source, 6);
+        source.addView(text(r.source.toUpperCase(new Locale("pt", "BR")) + " · CAPTURA AUTOMÁTICA", 11, green, true)); space(source, 6);
         source.addView(text(java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(r.time)), 12, muted, false));
         if (r.incomplete) { space(source, 8); source.addView(text("Dados incompletos. Informe o valor para incluir nos totais.", 13, ink, false)); }
         space(form, 16);
@@ -250,6 +254,12 @@ public class MainActivity extends AppCompatActivity {
             } catch (NumberFormatException | ArithmeticException ex) { value.setError("Use um valor positivo com até 2 casas decimais"); value.requestFocus(); }
         });
         space(form, 8); TextView cancel = text("Voltar sem alterar", 14, green, true); cancel.setGravity(Gravity.CENTER); cancel.setPadding(0, dp(16), 0, dp(16)); form.addView(cancel); cancel.setOnClickListener(v -> dialog.dismiss());
+        space(form, 8);
+        TextView remove = text("Apagar lançamento", 14, 0xffb0523e, true); remove.setGravity(Gravity.CENTER); remove.setPadding(0, dp(16), 0, dp(16)); form.addView(remove);
+        remove.setOnClickListener(v -> {
+            store.discard(r.id); loadEntries(); dialog.dismiss(); render();
+            com.google.android.material.snackbar.Snackbar.make(root, "Lançamento apagado", com.google.android.material.snackbar.Snackbar.LENGTH_LONG).show();
+        });
         dialog.setContentView(scroll);
         dialog.setOnShowListener(d -> {
             android.view.View sheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
@@ -286,7 +296,7 @@ public class MainActivity extends AppCompatActivity {
         final long id; final String name, category; final double value; final CaptureStore.Record record;
         Entry(CaptureStore.Record r) {
             record = r; id = r.id; name = r.name; value = r.cents / 100.0;
-            category = (r.incomplete ? "Dados incompletos" : r.category) + " · " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, new Locale("pt", "BR")).format(new java.util.Date(r.time));
+            category = (r.incomplete ? "Dados incompletos" : r.category) + " · " + r.source + " · " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT, new Locale("pt", "BR")).format(new java.util.Date(r.time));
         }
     }
 }

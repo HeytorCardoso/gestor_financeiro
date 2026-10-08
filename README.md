@@ -1,56 +1,41 @@
 # Finna — gestor financeiro Android em Java
 
-Lê novas notificações do Nubank (`com.nu.production`) usando o `NotificationListenerService` do Android, sem login bancário, API do banco ou acesso à conta. O app não possui permissão de internet.
+Captura novas notificações do Nubank (`com.nu.production`) e avisos de transferência enviada do Nubank no Gmail (`com.google.android.gm`). Não acessa contas bancárias ou caixas de e-mail, nem utiliza conexão com servidores. Não possui permissão de internet.
 
-## Ativar no aparelho
+## Usar
 
-1. Abra o projeto no Android Studio e execute o módulo `app` (API 24 ou superior).
-2. Abra **Captura → Gerenciar acesso no Android → Abrir configurações**.
-3. Autorize o **Finna** no acesso às notificações e volte ao app.
-4. Aguarde uma nova notificação real do Nubank. O serviço funciona sem a tela do app aberta, desde que o Android mantenha o acesso e o serviço habilitados.
-5. Confira o extrato: os lançamentos entram automaticamente, sem aprovação. Toque em qualquer lançamento para editar descrição, valor, tipo, categoria e observações em um painel deslizante. A notificação original permanece disponível para consulta.
-6. Notificações sem dados reconhecidos também aparecem no extrato, com a indicação **Sem valor**. Complementá-las é opcional; entram nos totais somente quando um valor é informado.
+1. Execute o módulo `app` pelo Android Studio (Android 7/API 24 ou superior).
+2. Abra **Captura → Gerenciar acesso no Android** e autorize o Finna.
+3. Mantenha as notificações de Nubank e Gmail habilitadas e aguarde uma nova movimentação.
+4. O lançamento reconhecido entra diretamente no extrato e nos totais, sem aprovação.
+5. Toque no registro para complementar observações, mudar descrição, valor, tipo e categoria, ou **Apagar lançamento**.
 
-É possível pausar a captura sem revogar a autorização. Notificações recebidas durante a pausa não são importadas posteriormente. O app começa vazio, não importa notificações antigas e não mistura dados simulados com reais. Planejamento ainda contém metas e limites ilustrativos.
+No Gmail, recebimentos são ignorados para que não sejam importados outra vez por e-mail. A tela Captura informa se o serviço recebeu uma notificação Gmail e se identificou uma saída. Essa informação de diagnóstico não grava o texto de e-mails rejeitados.
 
-## Formatos reconhecidos
+## Extração
 
-Os quatro formatos foram fornecidos pelo usuário, não confirmados em aparelho com Nubank:
+Título, título expandido, texto curto, texto expandido e linhas complementares são considerados em conjunto. O extrator reconhece variações de compras, Pix enviado/recebido, transferências e pagamentos de boleto; não exige uma frase inteira idêntica ao exemplo ou um horário específico. Valores repetidos entre título e corpo não tornam o registro ambíguo. Saldo e limite explicitamente identificados são separados do valor da operação.
 
-- `Compra de R$ 39,90 aprovada em Padaria às 12:30.`
-- `Você enviou R$ 10,00 para Ana via Pix.`
-- `Você recebeu R$ 10,00 de Ana via Pix.`
-- `O pagamento do seu boleto no valor de R$ 99,00 foi realizado com sucesso.`
+Para Gmail, a identificação textual de Nubank/Nu e de uma transferência enviada é obrigatória. Avisos recebidos e operações recusadas, canceladas, agendadas ou pendentes não são lançados como saídas confirmadas. Resumos de grupos de várias mensagens não são tratados como uma única operação: a captura depende das notificações individuais do Gmail. Não há autenticação do remetente: o nome exibido é um filtro textual.
 
-São aceitos separadores de milhar, variação de maiúsculas e espaços. Textos ambíguos, compras recusadas, conteúdo oculto e formatos diferentes são registrados como incompletos no extrato e não entram nos totais. O horário armazenado é o da notificação recebida pelo Android, não uma confirmação da data contábil da transação.
+Textos realmente sem tipo/valor identificável continuam no extrato como incompletos, fora dos totais. Ao abrir o app, registros incompletos salvos são reprocessados pelo extrator atualizado. Registros alterados manualmente e apagados são preservados; não se tenta adivinhar valores indisponíveis. Sem exemplos reais do aparelho, a compatibilidade de cada variante de notificação não pode ser garantida.
 
-## Armazenamento e limites
+## Persistência e identidade
 
-SQLite privado salva texto, descrição, centavos, categoria, observações, horário e identidade da notificação. Backups e transferências automáticas desses dados estão excluídos. A autorização Android dá acesso amplo às notificações, mas o serviço retorna imediatamente para aplicativos diferentes do Nubank.
+SQLite privado armazena dados monetários em centavos e preserva os lançamentos entre execuções. Migrações das versões anteriores mantêm os dados existentes. Edições manuais não são sobrescritas por atualizações da notificação. Apagar remove o registro do extrato e limpa seu texto, descrição, valor e observações, mantendo um marcador de identidade para evitar sua reimportação. Backups desses dados estão desabilitados.
 
-A identidade da notificação e seu horário de evento impedem a reimportação do mesmo evento. Atualizações de uma notificação incompleta podem completar seu conteúdo automaticamente, desde que o usuário ainda não a tenha editado. Alterações manuais são preservadas. Notificações distintas referentes à mesma transação não podem ser deduplicadas com certeza sem identificador bancário; revise pagamentos de fatura e compras para evitar dupla contagem. Se o banco reutilizar a mesma identidade e horário para transações diferentes, a segunda não será importada automaticamente.
+Uma identidade de notificação + horário de evento evita repetir a mesma captura. Notificações distintas do Nubank e do Gmail sobre uma mesma saída ainda podem gerar dois registros: não são eliminadas apenas por valor, pois isso poderia perder duas transferências legítimas iguais. O resultado do resumo é a diferença dos lançamentos, não o saldo bancário. Planejamento ainda contém metas ilustrativas.
 
-Não é possível obter valores que o sistema ou o Nubank ocultem. O resultado exibido representa entradas menos saídas reconhecidas, não o saldo bancário. Reinício forçado, restrições de bateria e políticas do aparelho podem interromper o serviço; confira o status e o acesso nas configurações. Em instalações externas, alguns aparelhos exigem liberar configurações restritas antes de habilitar o acesso às notificações.
+A leitura depende do acesso concedido e do conteúdo disponibilizado pelo Android. Pausar interrompe novas capturas; não há importação automática de histórico. Forçar parada ou restrições do aparelho podem interromper o serviço.
 
-## Código e testes
-
-- `MainActivity.java`: interface, autorização, revisão e status.
-- `NubankNotificationService.java`: filtro por pacote, leitura do conteúdo e captura.
-- `NotificationParser.java`: extrator conservador dos quatro formatos.
-- `CaptureStore.java`: persistência, deduplicação e revisão.
-- `NotificationParserTest.java`: testes unitários de interpretação.
-- `CaptureStoreTest.java`: teste instrumentado de persistência e deduplicação em banco separado.
+## Validação
 
 ```bash
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
-# Com emulador/aparelho conectado:
+# Com emulador/aparelho:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Referência: https://developer.android.com/reference/android/service/notification/NotificationListenerService
+O código principal e os testes compilaram diretamente com javac; 18 testes unitários de extração passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente, onde o Gradle encontrou restrição ao inicializar sockets. A compatibilidade com os textos reais reportados depende da validação no aparelho.
 
-## Validação nesta implementação
-
-O código Java principal e os novos testes compilaram diretamente com `javac` e as bibliotecas Android disponíveis. Os 5 testes unitários do extrator passaram com JUnit. O build Gradle foi bloqueado pelo ambiente ao inicializar os sockets de coordenação (`Could not determine a usable wildcard IP`), portanto o APK e o teste instrumentado ainda precisam ser validados no Android Studio/aparelho. A captura real com Nubank ainda não foi exercitada neste ambiente.
-
-O banco foi atualizado para a versão 2 com migração que preserva os lançamentos existentes e adiciona observações e proteção das edições manuais. Os formulários usam painéis deslizantes Material, campos contornados e as cores do app. A validação de edição e migração em dispositivo ainda requer o teste instrumentado.
+Referência Android: https://developer.android.com/reference/android/app/Notification.html
