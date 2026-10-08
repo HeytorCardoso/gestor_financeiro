@@ -27,4 +27,13 @@ public class NotificationContentTest {
         NotificationContent c = new NotificationContent(extras);
         assertFalse(GmailTransferParser.accepts(c.title, c.body));
     }
+    @Test public void capturesReportedEmailWhenGmailShowsSubjectInsteadOfSender() {
+        Bundle extras = new Bundle();
+        extras.putCharSequence(Notification.EXTRA_TITLE, "Transferência realizada com sucesso");
+        extras.putCharSequence(Notification.EXTRA_BIG_TEXT, "Olá, Fulano.\nA transferência para Beltrano, banco de destino, foi realizada com sucesso.\nValor enviado:\nR$ 1,2\n20 de outubro às 00:00\nCostuma fazer sempre essa tranferência?");
+        NotificationContent c = new NotificationContent(extras);
+        NotificationParser.Result result = GmailTransferParser.parse(c.title, c.body);
+        assertNotNull(result); assertEquals(-120, result.cents);
+        assertEquals("Transferência para Beltrano", result.name);
+    }
 }

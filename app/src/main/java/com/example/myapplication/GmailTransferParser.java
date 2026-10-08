@@ -7,7 +7,13 @@ public final class GmailTransferParser {
     private static final Pattern BANK = Pattern.compile("(?i)(?<![a-z0-9])nubank(?![a-z0-9])|(?:^|\\n)\\s*nu(?:\\s+pagamentos)?(?:\\s+s\\.?a\\.?)?\\s*(?:$|\\n|[<:·])");
     public static boolean accepts(String title, String body) {
         String text = (title == null ? "" : title) + "\n" + (body == null ? "" : body);
-        return BANK.matcher(text).find() && NotificationParser.isSentTransfer(text);
+        // Alguns avisos do Gmail expõem o assunto como título, sem o nome do remetente.
+        // Nesse caso exigimos a estrutura completa do comprovante fornecido pelo usuário.
+        String folded = NotificationParser.fold(text);
+        boolean suppliedTemplate = folded.contains("transferencia realizada com sucesso")
+                && Pattern.compile("\\b(?:a\\s+)?transferencia\\s+para\\s+[^\\n]+?\\s+foi\\s+realizada\\s+com\\s+sucesso\\b").matcher(folded).find()
+                && Pattern.compile("\\bvalor\\s+enviado\\s*:").matcher(folded).find();
+        return (BANK.matcher(text).find() || suppliedTemplate) && NotificationParser.isSentTransfer(text);
     }
     public static NotificationParser.Result parse(String title, String body) {
         if (!accepts(title, body)) return null;

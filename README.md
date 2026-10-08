@@ -16,7 +16,7 @@ No Gmail, recebimentos são ignorados para que não sejam importados outra vez p
 
 Título, título expandido, texto curto, texto expandido e linhas complementares são considerados em conjunto. O extrator reconhece variações de compras, Pix enviado/recebido, transferências e pagamentos de boleto; não exige uma frase inteira idêntica ao exemplo ou um horário específico. Valores repetidos entre título e corpo não tornam o registro ambíguo. Saldo e limite explicitamente identificados são separados do valor da operação.
 
-Para Gmail, a identificação textual de Nubank/Nu e de uma transferência enviada é obrigatória. Avisos recebidos e operações recusadas, canceladas, agendadas ou pendentes não são lançados como saídas confirmadas. Resumos de grupos de várias mensagens não são tratados como uma única operação: a captura depende das notificações individuais do Gmail. Não há autenticação do remetente: o nome exibido é um filtro textual.
+Para Gmail, o filtro aceita a identificação textual de Nubank/Nu junto de uma transferência enviada. Quando o remetente não aparece, aceita especificamente o formato informado pelo usuário: assunto “Transferência realizada com sucesso”, frase “A transferência para … foi realizada com sucesso” e campo “Valor enviado:”. Esse formato é um filtro textual e não autentica que o e-mail veio do Nubank. Avisos recebidos e operações recusadas, canceladas, agendadas ou pendentes não são lançados como saídas confirmadas. Resumos de grupos de várias mensagens não são tratados como uma única operação: a captura depende das notificações individuais do Gmail. Não há autenticação do remetente: o nome exibido é um filtro textual.
 
 Textos realmente sem tipo/valor identificável continuam no extrato como incompletos, fora dos totais. Ao abrir o app, registros incompletos salvos são reprocessados pelo extrator atualizado. Registros alterados manualmente e apagados são preservados; não se tenta adivinhar valores indisponíveis. Sem exemplos reais do aparelho, a compatibilidade de cada variante de notificação não pode ser garantida.
 
@@ -36,6 +36,8 @@ A leitura depende do acesso concedido e do conteúdo disponibilizado pelo Androi
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-O código principal e os testes compilaram diretamente com javac; 18 testes unitários de extração passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente, onde o Gradle encontrou restrição ao inicializar sockets. A compatibilidade com os textos reais reportados depende da validação no aparelho.
+O código principal e os testes compilaram diretamente com javac; 23 testes unitários de extração passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente, onde o Gradle encontrou restrição ao inicializar sockets. A compatibilidade com os textos reais reportados depende da validação no aparelho.
 
 Referência Android: https://developer.android.com/reference/android/app/Notification.html
+
+O formato informado de e-mail aceita valor em outra linha, uma ou duas casas decimais e destinatário seguido de vírgula/dados bancários. Registros incompletos já salvos podem ser reprocessados; e-mails anteriormente ignorados não estavam salvos e exigem uma nova notificação para captura.

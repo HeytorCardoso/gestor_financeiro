@@ -39,4 +39,26 @@ public class GmailTransferParserTest {
     @Test public void emailFooterWithNaoIsNotRejected() {
         assertEquals(-1000, GmailTransferParser.parse("Nubank", "Pix enviado. Valor: R$ 10,00. Não responda a este e-mail.").cents);
     }
+    private static String suppliedEmail(String amount) {
+        return "Olá, Fulano.\nA transferência para Beltrano, instituição de destino, foi realizada com sucesso.\nValor enviado:\nR$ " + amount + "\n20 de outubro às 00:00\nCostuma fazer sempre essa tranferência?";
+    }
+    @Test public void recognizesUserReportedTemplateWithoutSenderInTitle() {
+        NotificationParser.Result r = GmailTransferParser.parse("Transferência realizada com sucesso", suppliedEmail("12,50"));
+        assertNotNull(r); assertEquals(-1250, r.cents); assertEquals("Transferência para Beltrano", r.name);
+    }
+    @Test public void acceptsOneDecimalDigitAndThousands() {
+        assertEquals(-120, GmailTransferParser.parse("Transferência realizada com sucesso", suppliedEmail("1,2")).cents);
+        assertEquals(-123456, GmailTransferParser.parse("Transferência realizada com sucesso", suppliedEmail("1.234,56")).cents);
+    }
+    @Test public void recognizesBodyWhenSubjectIsTruncated() {
+        assertEquals(-1250, GmailTransferParser.parse("Nubank", suppliedEmail("12,50")).cents);
+    }
+    @Test public void subjectAloneDoesNotBypassBankFilter() {
+        assertFalse(GmailTransferParser.accepts("Transferência realizada com sucesso", "Valor enviado: R$ 10,00"));
+        assertFalse(GmailTransferParser.accepts("Outro banco", "Transferência realizada com sucesso de R$ 10,00."));
+    }
+    @Test public void reportedFormatDoesNotImportReceivedOrFailedTransfer() {
+        assertFalse(GmailTransferParser.accepts("Transferência realizada com sucesso", suppliedEmail("12,50") + "\nPix recebido"));
+        assertFalse(GmailTransferParser.accepts("Transferência realizada com sucesso", suppliedEmail("12,50") + "\nTransferência cancelada"));
+    }
 }
