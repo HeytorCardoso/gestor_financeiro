@@ -36,7 +36,7 @@ A leitura depende do acesso concedido e do conteúdo disponibilizado pelo Androi
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-O código principal e os testes compilaram diretamente com javac; 59 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
+O código principal e os testes compilaram diretamente com javac; 67 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
 
 Referência Android: https://developer.android.com/reference/android/app/Notification.html
 
@@ -82,7 +82,7 @@ Períodos: todo o histórico, hoje, últimos sete dias (hoje + seis dias anterio
 
 O extrato exibe quantidade de registros e resultado do conjunto filtrado, mantendo todas as entradas/saídas conhecidas, inclusive faturas e valores sem classificação, conforme a regra de cálculo atual. Os filtros não alteram o resumo geral. Registros apagados e capturas unidas continuam fora dos totais duplicados. A data usada é a de captura da notificação, não a data contábil confirmada pelo banco.
 
-Os 59 testes unitários incluem identidades para categorias, pesquisa, limites de período, conversão UTC do calendário e horário de verão histórico. Os testes instrumentados adicionais cobrem aprendizagem persistente, exceções locais, fontes diferentes, proteção de edições e migração das versões 3, 4 e 5 para 6. Foram compilados; a execução instrumentada e a conferência visual ainda requerem aparelho/emulador fora das restrições deste ambiente.
+Os 67 testes unitários incluem identidades para categorias, pesquisa, limites de período, conversão UTC do calendário e horário de verão histórico. Os testes instrumentados adicionais cobrem aprendizagem persistente, exceções locais, fontes diferentes, proteção de edições e migração das versões 3, 4 e 5 para 6. Foram compilados; a execução instrumentada e a conferência visual ainda requerem aparelho/emulador fora das restrições deste ambiente.
 
 
 ## Etapa 5 — Edição rápida e exclusão com Desfazer
@@ -101,4 +101,27 @@ A comparação mostra diferenças em reais e, quando a base anterior é positiva
 
 Todas as saídas com valor conhecido entram nos totais, inclusive faturas e lançamentos sem classificação. Registros sem valor são informados separadamente. Fontes já unidas e registros apagados ficam fora, como no resultado geral.
 
-Validação: 59 testes unitários passaram, incluindo limites de mês, mudança de ano, fevereiro bissexto, categorias, faturas e valores sem classificação. Código principal e testes instrumentados compilaram com Java 11. Novos testes instrumentados cobrem edição rápida, recuperação após reabrir o banco, expiração, exclusões sucessivas, fontes unidas e migração da versão 5. A execução desses testes e a validação visual ainda precisam de aparelho/emulador; o ambiente continua com as restrições de Gradle/ADB descritas acima.
+Validação: 67 testes unitários passaram, incluindo limites de mês, mudança de ano, fevereiro bissexto, categorias, faturas e valores sem classificação. Código principal e testes instrumentados compilaram com Java 11. Novos testes instrumentados cobrem edição rápida, recuperação após reabrir o banco, expiração, exclusões sucessivas, fontes unidas e migração da versão 5. A execução desses testes e a validação visual ainda precisam de aparelho/emulador; o ambiente continua com as restrições de Gradle/ADB descritas acima.
+
+
+## Etapa 7 — Exportação e recuperação
+
+Em **Captura → Seus dados com você**:
+
+- **Exportar lançamentos em CSV** abre o seletor de destino do Android. Exporta o histórico ativo completo, incluindo registros incompletos, descrição, data local de captura com fuso, valor com sinal, categoria, natureza, destinatário, origem e observações. Não exporta fontes ocultas já unidas nem registros apagados. O arquivo usa UTF-8 com BOM, separador ponto e vírgula e valores decimais com vírgula. Textos que poderiam virar fórmulas na planilha recebem proteção.
+- **Salvar backup completo** gera JSON versionado com histórico, textos originais, edições, regras aprendidas, decisões de duplicidade e fontes unidas. Preserva marcadores de exclusão para impedir recaptura. Exclusões com Desfazer em aberto continuam excluídas no backup, com detalhes removidos; exportar não encerra o prazo no aparelho. Preferências de captura e autorização do Android não fazem parte do arquivo.
+- **Recuperar de um backup** abre um arquivo pelo seletor do Android, valida formato, versão, campos, identidades e vínculos e apresenta confirmação com a quantidade de lançamentos. Recuperar **substitui integralmente** o histórico atual, incluindo categorias aprendidas e decisões de duplicidade. Não combina históricos. Salve um backup atual antes se precisar conservar ambos. A substituição ocorre em uma transação; arquivos inválidos ou falhas de inserção preservam a base atual.
+
+CSV serve para consulta em planilhas; a recuperação usa o JSON do Finna. O formato de backup é `finna-backup`, versão 1, com limite de 20 MB e 100 mil registros por coleção. Os arquivos contêm dados financeiros e não são criptografados. O usuário escolhe o destino, inclusive um provedor de nuvem instalado no aparelho, usando o seletor do sistema. O app não pede acesso geral ao armazenamento nem adiciona permissão de internet. Operações de arquivo ocorrem fora da thread da interface. Cancelar o seletor não altera o histórico.
+
+## Dashboard pessoal
+
+A aba **Dashboard** usa os lançamentos reais contabilizados pelo app e permite selecionar meses, voltar ao mês atual e ocultar valores. Mostra receitas, gastos, resultado e quantidade de registros, além de:
+
+- **Receitas e gastos por dia:** barras agrupadas; toque em um dia para consultar os valores.
+- **Distribuição dos gastos:** gráfico de rosca e lista de categorias com valores e participação percentual. Toque em uma categoria da lista para abrir o extrato daquele mês filtrado pelas despesas dessa categoria.
+- **Resultado nos últimos seis meses:** barras positivas e negativas, com consulta por toque e períodos sem registros zerados.
+
+**Ver extrato deste mês** abre todos os lançamentos do período. As séries respeitam o fuso local e usam a data de captura. Mês atual pode estar incompleto. Todas as saídas conhecidas entram nos gráficos, incluindo faturas e itens sem classificação; fontes já unidas e registros apagados ficam fora. Registros sem valor são informados separadamente. Ocultar valores também esconde os gráficos. Os gráficos têm descrições para leitores de tela e seleção por teclado com setas laterais; são desenhados localmente, sem bibliotecas ou serviços externos.
+
+Validação desta entrega: código principal, testes unitários e testes instrumentados compilaram com Java 11; **67 testes unitários passaram**. Os novos testes verificam CSV, segurança de células de planilha, valores negativos exatos, séries diárias e mensais, virada de ano e fevereiro bissexto. Os testes instrumentados adicionais cobrem backup/restauração, regras, edições, fontes unidas, marcadores de exclusão, arquivos inválidos e rollback de substituição. Foram compilados, mas não executados: o build APK, o seletor de documentos e a conferência visual dos gráficos ainda precisam de Android Studio com aparelho/emulador, dadas as restrições de Gradle/ADB deste ambiente.

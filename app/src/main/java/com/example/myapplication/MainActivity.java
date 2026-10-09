@@ -27,6 +27,13 @@ public class MainActivity extends AppCompatActivity {
     private TextView statementTotals;
     private com.google.android.material.textfield.TextInputEditText searchInput;
     private CaptureStore store;
+    private boolean fileBusy=false;
+    private final androidx.activity.result.ActivityResultLauncher<String> csvFile=registerForActivityResult(
+        new androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/csv"),uri -> {if(uri!=null)writeFile(uri,false);});
+    private final androidx.activity.result.ActivityResultLauncher<String> backupFile=registerForActivityResult(
+        new androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json"),uri -> {if(uri!=null)writeFile(uri,true);});
+    private final androidx.activity.result.ActivityResultLauncher<String[]> restoreFile=registerForActivityResult(
+        new androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),uri -> {if(uri!=null)readBackup(uri);});
     private long lastRevision = -1;
     private String lastStatus = "";
     private final android.content.SharedPreferences.OnSharedPreferenceChangeListener settingsListener = (prefs, key) -> runOnUiThread(this::render);
@@ -131,14 +138,15 @@ public class MainActivity extends AppCompatActivity {
         content.addView(header); space(content, 28);
         if (page.equals("Início")) home();
         else if (page.equals("Extrato")) statement();
+        else if (page.equals("Dashboard")) dashboard();
         else if (page.equals("Planejar")) planning();
         else profile();
         navigation = row(); navigation.setPadding(dp(8), dp(10), dp(8), dp(10)); navigation.setBackgroundColor(Color.WHITE);
-        String[] labels = {"Início", "Extrato", "Planejar", "Captura"};
-        String[] symbols = {"⌂", "≡", "◎", "○"};
+        String[] labels = {"Início", "Extrato", "Dashboard", "Planejar", "Captura"};
+        String[] symbols = {"⌂", "≡", "▥", "◎", "○"};
         for (int i = 0; i < labels.length; i++) {
             final String target = labels[i];
-            TextView item = text(symbols[i] + "\n" + target, 13, page.equals(target) ? green : muted, page.equals(target));
+            TextView item = text(symbols[i] + "\n" + target, 11, page.equals(target) ? green : muted, page.equals(target));
             item.setGravity(Gravity.CENTER); item.setPadding(0, dp(5), 0, dp(5));
             if (page.equals(target)) item.setBackground(shape(0xffeaf2e9, 16));
             navigation.addView(item, new LinearLayout.LayoutParams(0, dp(56), 1)); item.setOnClickListener(v -> go(target));
@@ -355,7 +363,8 @@ public class MainActivity extends AppCompatActivity {
         space(status, 8); button(status, "Configurar captura", () -> go("Captura")); space(content, 18);
     }
     private void profile() {
-        title("Captura automática", "Nubank e transferências enviadas pelo Gmail.");
+        title("Captura e dados", "Notificações, exportação e recuperação.");
+        dataControls();
         captureStatus();
         LinearLayout details = card(Color.WHITE); content.addView(details);
         details.addView(text("Como funciona", 19, ink, true)); space(details, 12);
@@ -372,6 +381,106 @@ public class MainActivity extends AppCompatActivity {
         gmail.addView(text(getSharedPreferences("capture", MODE_PRIVATE).getString("gmailStatus", "Ainda não foi recebida uma notificação do Gmail. Confira se os avisos desses e-mails estão ativados no Gmail."), 13, muted, false));
         space(content, 12); content.addView(text("Lançamentos reconhecidos entram automaticamente. Notificações sem dados suficientes aparecem no extrato como incompletas e ficam fora dos totais até você informar o valor. Compras no crédito e pagamentos de fatura são separados automaticamente quando identificados. Possíveis repetições entre fontes são sinalizadas no extrato.", 12, muted, false));
     }
+    private void dataControls() {
+        LinearLayout box=card(Color.WHITE);content.addView(box);
+        box.addView(text("Seus dados com você",19,ink,true));space(box,8);
+        box.addView(text("CSV para planilhas. Backup completo para recuperar histórico, edições, categorias e fontes unidas. Você escolhe onde salvar; o arquivo contém seus dados financeiros e não tem senha.",13,muted,false));
+        space(box,12);button(box,"Exportar lançamentos em CSV",() -> {if(!fileBusy)csvFile.launch(fileName("csv"));});
+        space(box,8);button(box,"Salvar backup completo",() -> {if(!fileBusy)backupFile.launch(fileName("json"));});
+        space(box,8);button(box,"Recuperar de um backup",() -> {if(!fileBusy)restoreFile.launch(new String[]{"application/json","text/plain","application/octet-stream"});});
+        space(content,20);
+    }
+    private String fileName(String extension) {return "finna-"+new java.text.SimpleDateFormat("yyyy-MM-dd-HHmmss",Locale.ROOT).format(new java.util.Date())+"."+extension;}
+    private interface FileWork {void run() throws Exception;}
+    private void fileTask(String progress,FileWork work,Runnable success) {
+        if(fileBusy)return;fileBusy=true;Toast.makeText(this,progress,Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {work.run();runOnUiThread(() -> {fileBusy=false;if(!isDestroyed())success.run();});}
+            catch(Exception ex) {runOnUiThread(() -> {fileBusy=false;if(!isDestroyed())Toast.makeText(this,"Não foi possível concluir. Verifique o arquivo e o acesso ao local escolhido. Seus dados atuais foram preservados.",Toast.LENGTH_LONG).show();});}
+        },"finna-files").start();
+    }
+    private void writeFile(android.net.Uri uri,boolean backup) {
+        fileTask(backup ? "Preparando backup…" : "Exportando CSV…",() -> {
+            try(CaptureStore filesStore=new CaptureStore(getApplicationContext());java.io.OutputStream output=getContentResolver().openOutputStream(uri,"wt")) {
+                if(output==null)throw new java.io.IOException("Arquivo indisponível");
+                if(backup)DataFiles.writeBackup(filesStore,output,System.currentTimeMillis());
+                else DataFiles.csv(filesStore,output);
+            }
+        },() -> Toast.makeText(this,backup ? "Backup salvo" : "CSV exportado",Toast.LENGTH_LONG).show());
+    }
+    private void readBackup(android.net.Uri uri) {
+        final org.json.JSONObject[] document=new org.json.JSONObject[1];
+        fileTask("Validando backup…",() -> {
+            try(java.io.InputStream input=getContentResolver().openInputStream(uri)) {
+                if(input==null)throw new java.io.IOException("Arquivo indisponível");document[0]=DataFiles.read(input);
+            }
+        },() -> confirmRestore(document[0]));
+    }
+    private void confirmRestore(org.json.JSONObject document) {
+        com.google.android.material.bottomsheet.BottomSheetDialog dialog=new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        LinearLayout form=card(background);ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        form.addView(text("Recuperar seu histórico",24,ink,true));space(form,12);
+        int count=0;
+        org.json.JSONArray rows=document.optJSONArray("captures");
+        for(int i=0;i<rows.length();i++) {int state=rows.optJSONObject(i).optInt("pending");if(state==0||state==1)count++;}
+        form.addView(text("O backup tem "+count+" lançamentos visíveis. Recuperar substituirá todo o histórico atual, incluindo regras de categoria e decisões de duplicidade. Não haverá união com os dados deste aparelho. Salve um backup atual antes se quiser conservá-los.",15,ink,false));
+        space(form,20);button(form,"Substituir histórico e recuperar",() -> {
+            dialog.dismiss();fileTask("Recuperando histórico…",() -> {
+                try(CaptureStore filesStore=new CaptureStore(getApplicationContext())) {DataFiles.restore(filesStore,document);}
+            },() -> {loadEntries();render();Toast.makeText(this,"Histórico recuperado",Toast.LENGTH_LONG).show();});
+        });
+        space(form,8);button(form,"Cancelar",dialog::dismiss);showPanel(dialog,scroll);
+    }
+    private void dashboard() {
+        title("Dashboard","Seus lançamentos em gráficos.");
+        LinearLayout controls=card(Color.WHITE);content.addView(controls);
+        LinearLayout selector=row();TextView back=text("‹",28,green,true);back.setGravity(Gravity.CENTER);
+        selector.addView(back,new LinearLayout.LayoutParams(dp(48),dp(48)));back.setContentDescription("Mês anterior");back.setOnClickListener(v -> {monthOffset--;render();});
+        DashboardData data=new DashboardData(System.currentTimeMillis(),monthOffset);
+        TextView label=text(new java.text.SimpleDateFormat("MMMM 'de' yyyy",new Locale("pt","BR")).format(new java.util.Date(data.month.start)),17,ink,true);
+        label.setGravity(Gravity.CENTER);selector.addView(label,new LinearLayout.LayoutParams(0,-2,1));
+        TextView next=text("›",28,monthOffset<0 ? green : muted,true);next.setGravity(Gravity.CENTER);selector.addView(next,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        next.setContentDescription("Próximo mês");next.setEnabled(monthOffset<0);next.setOnClickListener(v -> {monthOffset++;render();});controls.addView(selector);
+        if(monthOffset!=0)button(controls,"Voltar ao mês atual",() -> {monthOffset=0;render();});
+        TextView privacy=text(hidden ? "Mostrar valores" : "Ocultar valores",13,green,true);privacy.setPadding(0,dp(12),0,dp(12));controls.addView(privacy);privacy.setOnClickListener(v -> {hidden=!hidden;render();});
+        for(Entry e:entries) {CaptureStore.Record r=e.record;data.add(r.time,r.cents,r.kind,r.incomplete,r.category);}
+        controls.addView(text("Receitas: "+amount(data.month.current.receipts),16,green,true));
+        controls.addView(text("Gastos: "+amount(data.month.current.expenses),16,ink,true));
+        controls.addView(text("Resultado: "+amount(data.month.current.result()),23,green,true));
+        space(controls,8);controls.addView(text(data.month.count+" lançamentos · Por data local de captura",12,muted,false));
+        controls.addView(text("Inclui todas as saídas: compras, faturas e valores sem classificação. Meses sem captura aparecem zerados.",12,muted,false));
+        if(data.month.incompleteCount>0)controls.addView(text(data.month.incompleteCount+" lançamentos sem valor identificado. Complemente no extrato.",13,0xff9b6b22,true));
+        space(controls,12);button(controls,"Ver extrato deste mês",() -> openDashboardStatement(data.month,null));
+        if(data.month.count==0) {space(content,16);content.addView(text("Nenhum lançamento capturado neste mês. Os gráficos serão preenchidos com suas notificações.",14,muted,false));}
+        String[] days=new String[data.dailyIncome.length];for(int i=0;i<days.length;i++)days[i]=String.valueOf(i+1);
+        chartCard("Receitas e gastos por dia","Verde: receitas · Terracota: gastos. Toque em um dia.",FinanceChartView.BARS,days,data.dailyIncome,data.dailyExpenses,null);
+        java.util.ArrayList<java.util.Map.Entry<String,Long>> categories=data.month.topCategories();
+        String[] names=new String[categories.size()];long[] values=new long[categories.size()];
+        for(int i=0;i<names.length;i++){names[i]=categories.get(i).getKey();values[i]=categories.get(i).getValue();}
+        LinearLayout categoryBox=chartCard("Distribuição dos gastos","Toque no gráfico ou em uma categoria para detalhar.",FinanceChartView.DONUT,names,values,null,null);
+        for(int i=0;i<names.length;i++) {
+            final String category=names[i];
+            TextView item=text(category+" · "+amount(values[i])+ (hidden ? "" : String.format(new Locale("pt","BR")," · %.1f%%",100.0*values[i]/data.month.current.expenses)),14,green,true);
+            item.setPadding(0,dp(12),0,dp(12));categoryBox.addView(item);item.setOnClickListener(v -> openDashboardStatement(data.month,category));
+        }
+        if(names.length==0)categoryBox.addView(text("Sem gastos capturados no período.",13,muted,false));
+        String[] months=new String[6];for(int i=0;i<6;i++)months[i]=new java.text.SimpleDateFormat("MMM/yy",new Locale("pt","BR")).format(new java.util.Date(data.monthStarts[i]));
+        chartCard("Resultado nos últimos 6 meses","Receitas menos todas as saídas. Mês atual pode estar em andamento.",FinanceChartView.BARS,months,data.monthlyResults,null,null);
+    }
+    private LinearLayout chartCard(String heading,String help,int mode,String[] labels,long[] first,long[] second,FinanceChartView.Selection listener) {
+        space(content,18);LinearLayout box=card(Color.WHITE);content.addView(box);box.addView(text(heading,18,ink,true));space(box,8);box.addView(text(help,12,muted,false));
+        if(hidden) {space(box,16);box.addView(text("Valores ocultos",15,muted,true));return box;}
+        TextView selected=text("Toque para consultar valores",13,green,true);
+        selected.setAccessibilityLiveRegion(android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        FinanceChartView chart=new FinanceChartView(this,mode,labels,first,second,(index,description) -> {selected.setText(description);if(listener!=null)listener.selected(index,description);});
+        box.addView(chart,new LinearLayout.LayoutParams(-1,dp(230)));box.addView(selected);
+        return box;
+    }
+    private void openDashboardStatement(MonthlySummary month,String category) {
+        statementQuery.clear();statementQuery.period=StatementQuery.PERIODS[4];statementQuery.customStart=month.start;statementQuery.customEndExclusive=month.end;
+        if(category!=null)statementQuery.category=category;filter=category==null ? "Todas" : "Despesas";go("Extrato");
+    }
+
     private void review(Entry entry) { editEntry(entry.record); }
 
     private com.google.android.material.textfield.TextInputLayout field(LinearLayout parent, String label) {
