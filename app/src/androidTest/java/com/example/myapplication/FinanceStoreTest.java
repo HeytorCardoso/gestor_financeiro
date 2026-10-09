@@ -100,7 +100,7 @@ public class FinanceStoreTest {
         try(CaptureStore store=new CaptureStore(context)) {
             CaptureStore.Record r=store.records(false).get(0);
             assertEquals(-12000,r.cents);assertEquals("Nome personalizado",r.name);assertEquals("Observação antiga",r.notes);
-            assertEquals(TransactionKind.CREDIT_PURCHASE,r.kind);assertEquals(5,store.getReadableDatabase().getVersion());
+            assertEquals(TransactionKind.CREDIT_PURCHASE,r.kind);assertEquals(6,store.getReadableDatabase().getVersion());
             assertEquals("merchant:loja",r.categoryKey);assertTrue(r.categoryManual);
         }
     }
@@ -118,7 +118,7 @@ public class FinanceStoreTest {
             CaptureStore.Record r=store.records(false).get(0);
             assertEquals(-12000,r.cents);assertEquals("Nome personalizado",r.name);assertEquals("Casa",r.category);
             assertEquals(TransactionKind.ACCOUNT_EXPENSE,r.kind);assertEquals("merchant:loja",r.categoryKey);
-            assertTrue(r.categoryManual);assertEquals(5,store.getReadableDatabase().getVersion());
+            assertTrue(r.categoryManual);assertEquals(6,store.getReadableDatabase().getVersion());
         }
     }
 }

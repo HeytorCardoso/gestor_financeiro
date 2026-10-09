@@ -20,6 +20,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout root, content, navigation;
     private String page = "Início", filter = "Todas";
     private boolean hidden = false;
+    private int monthOffset=0;
+    private CaptureStore.Deletion undoDeletion;
     private final StatementQuery statementQuery=new StatementQuery();
     private LinearLayout statementRows;
     private TextView statementTotals;
@@ -29,7 +31,7 @@ public class MainActivity extends AppCompatActivity {
     private String lastStatus = "";
     private final android.content.SharedPreferences.OnSharedPreferenceChangeListener settingsListener = (prefs, key) -> runOnUiThread(this::render);
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable refresh = new Runnable() { public void run() { if (store.revision() != lastRevision || !captureState().equals(lastStatus)) { loadEntries(); render(); } refreshHandler.postDelayed(this, 1500); } };
+    private final Runnable refresh = new Runnable() { public void run() { store.purgeExpiredDeletions(System.currentTimeMillis()); if (store.revision() != lastRevision || !captureState().equals(lastStatus)) { loadEntries(); render(); } refreshHandler.postDelayed(this, 1500); } };
     private final ArrayList<Entry> entries = new ArrayList<>();
     private FinancialSummary summary = new FinancialSummary();
     private ArrayList<CaptureStore.Duplicate> duplicates = new ArrayList<>();
@@ -43,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
             page = state.getString("page", "Início");
             filter = state.getString("filter", "Todas");
             hidden = state.getBoolean("hidden");
+            monthOffset=state.getInt("monthOffset",0);
             statementQuery.search=state.getString("search","");
             statementQuery.category=state.getString("category",StatementQuery.ALL_CATEGORIES);
             statementQuery.period=state.getString("period",StatementQuery.PERIODS[0]);
@@ -64,11 +67,13 @@ public class MainActivity extends AppCompatActivity {
     }
     @Override protected void onDestroy() { store.close(); super.onDestroy(); }
     @Override protected void onSaveInstanceState(Bundle out) {
+        out.putInt("monthOffset",monthOffset);
         out.putString("search",statementQuery.search);out.putString("category",statementQuery.category);out.putString("period",statementQuery.period);
         out.putLong("rangeStart",statementQuery.customStart);out.putLong("rangeEnd",statementQuery.customEndExclusive);
         super.onSaveInstanceState(out); out.putString("page", page); out.putString("filter", filter); out.putBoolean("hidden", hidden);
     }
     private void loadEntries() {
+        store.purgeExpiredDeletions(System.currentTimeMillis());
         lastRevision = store.revision();
         entries.clear();
         summary = new FinancialSummary();
@@ -138,6 +143,17 @@ public class MainActivity extends AppCompatActivity {
             if (page.equals(target)) item.setBackground(shape(0xffeaf2e9, 16));
             navigation.addView(item, new LinearLayout.LayoutParams(0, dp(56), 1)); item.setOnClickListener(v -> go(target));
         }
+        undoDeletion=store.latestDeletion(System.currentTimeMillis());
+        if(undoDeletion!=null) {
+            final long batch=undoDeletion.id;
+            LinearLayout undoBar=card(0xffe1eee3);
+            undoBar.addView(text("Lançamento apagado · Você pode desfazer por até 10 segundos",12,ink,false));
+            button(undoBar,"Desfazer exclusão",() -> {
+                boolean restored=store.undoDeletion(batch,System.currentTimeMillis());loadEntries();render();
+                if(!restored) Toast.makeText(this,"O prazo para desfazer terminou",Toast.LENGTH_SHORT).show();
+            });
+            root.addView(undoBar);
+        }
         root.addView(navigation);
         if(restoreSearch && searchInput!=null) {searchInput.requestFocus();searchInput.setSelection(Math.min(Math.max(selection,0),searchInput.length()));}
     }
@@ -168,11 +184,7 @@ public class MainActivity extends AppCompatActivity {
         }
         duplicateNotice();
         space(content, 18); button(content, "Configurar captura", () -> go("Captura"));
-        space(content, 24); section("Para onde vai seu dinheiro", "Capturado");
-        LinearLayout expenses = card(Color.WHITE); content.addView(expenses);
-        category(expenses, "Alimentação", categoryTotal("Alimentação"), 0xffd5a24c);
-        category(expenses, "Casa", categoryTotal("Casa"), 0xff7d9e8c);
-        category(expenses, "Mobilidade", categoryTotal("Mobilidade"), 0xff8799b5);
+        monthlySummary();
         space(content, 24); section("Últimas movimentações", "Ver todas").setOnClickListener(v -> go("Extrato"));
         LinearLayout transactions = card(Color.WHITE); content.addView(transactions);
         for (int i = 0; i < Math.min(3, entries.size()); i++) transaction(transactions, entries.get(i));
@@ -448,10 +460,7 @@ public class MainActivity extends AppCompatActivity {
         space(form, 8); TextView cancel = text("Voltar sem alterar", 14, green, true); cancel.setGravity(Gravity.CENTER); cancel.setPadding(0, dp(16), 0, dp(16)); form.addView(cancel); cancel.setOnClickListener(v -> dialog.dismiss());
         space(form, 8);
         TextView remove = text(linked.isEmpty() ? "Apagar lançamento" : "Apagar lançamento e fontes associadas", 14, 0xffb0523e, true); remove.setGravity(Gravity.CENTER); remove.setPadding(0, dp(16), 0, dp(16)); form.addView(remove);
-        remove.setOnClickListener(v -> {
-            store.discard(r.id); loadEntries(); dialog.dismiss(); render();
-            com.google.android.material.snackbar.Snackbar.make(root, "Lançamento apagado", com.google.android.material.snackbar.Snackbar.LENGTH_LONG).show();
-        });
+        remove.setOnClickListener(v -> deleteEntry(r,dialog));
         dialog.setContentView(scroll);
         dialog.setOnShowListener(d -> {
             android.view.View sheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
@@ -466,12 +475,77 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
+    private void deleteEntry(CaptureStore.Record r,com.google.android.material.bottomsheet.BottomSheetDialog dialog) {
+        store.deleteWithUndo(r.id,System.currentTimeMillis());dialog.dismiss();loadEntries();render();
+    }
+    private void quickEdit(CaptureStore.Record r) {
+        com.google.android.material.bottomsheet.BottomSheetDialog dialog=new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        LinearLayout form=card(background);ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        form.addView(text("Edição rápida",24,ink,true));space(form,8);
+        form.addView(text(r.name,16,green,true));space(form,16);
+        com.google.android.material.textfield.MaterialAutoCompleteTextView category=dropdown(form,"Categoria",r.category,CategoryRules.CATEGORIES);
+        CheckBox remember=new CheckBox(this);remember.setText("Lembrar categoria para os próximos semelhantes");remember.setTextColor(muted);
+        remember.setButtonTintList(android.content.res.ColorStateList.valueOf(green));remember.setChecked(true);
+        remember.setVisibility(r.categoryKey.isEmpty() ? android.view.View.GONE : android.view.View.VISIBLE);form.addView(remember);
+        com.google.android.material.textfield.TextInputEditText notes=input(form,"Observações",r.notes,android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);notes.setMinLines(2);
+        space(form,16);button(form,"Salvar detalhes",() -> {
+            boolean saved=store.editDetails(r.id,category.getText().toString(),notes.getText().toString().trim(),remember.isChecked());
+            dialog.dismiss();loadEntries();render();Toast.makeText(this,saved ? "Detalhes salvos" : "Este lançamento não está mais disponível",Toast.LENGTH_SHORT).show();
+        });
+        space(form,8);button(form,"Editar todos os campos",() -> {dialog.dismiss();editEntry(r);});
+        space(form,8);TextView remove=text("Apagar lançamento e fontes associadas",14,0xffb0523e,true);
+        remove.setGravity(Gravity.CENTER);remove.setPadding(0,dp(16),0,dp(16));form.addView(remove);remove.setOnClickListener(v -> deleteEntry(r,dialog));
+        showPanel(dialog,scroll);
+    }
+    private String amount(long cents) {return hidden ? "••••" : money.format(cents/100.0);}
+    private void monthlySummary() {
+        MonthlySummary month=new MonthlySummary(System.currentTimeMillis(),monthOffset);
+        for(Entry e:entries) {CaptureStore.Record r=e.record;month.add(r.time,r.cents,r.kind,r.incomplete,r.category);}
+        space(content,24);section("Resumo mensal","Por data de captura");
+        LinearLayout box=card(Color.WHITE);content.addView(box);
+        LinearLayout selector=row();
+        TextView back=text("‹",28,green,true);back.setGravity(Gravity.CENTER);selector.addView(back,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        back.setContentDescription("Mês anterior");back.setOnClickListener(v -> {monthOffset--;render();});
+        TextView label=text(new java.text.SimpleDateFormat("MMMM 'de' yyyy",new Locale("pt","BR")).format(new java.util.Date(month.start)),17,ink,true);
+        label.setGravity(Gravity.CENTER);selector.addView(label,new LinearLayout.LayoutParams(0,-2,1));
+        TextView next=text("›",28,monthOffset<0 ? green : muted,true);next.setGravity(Gravity.CENTER);selector.addView(next,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        next.setContentDescription("Próximo mês");next.setEnabled(monthOffset<0);next.setOnClickListener(v -> {monthOffset++;render();});box.addView(selector);
+        if(monthOffset!=0) {TextView today=text("Voltar ao mês atual",13,green,true);today.setPadding(0,dp(12),0,dp(12));box.addView(today);today.setOnClickListener(v -> {monthOffset=0;render();});}
+        space(box,12);
+        box.addView(text("Receitas: "+amount(month.current.receipts),16,green,true));
+        box.addView(text("Gastos: "+amount(month.current.expenses),16,ink,true));
+        box.addView(text("Resultado: "+amount(month.current.result()),20,green,true));
+        space(box,8);box.addView(text(month.count+" lançamentos · Inclui faturas e valores sem classificação",12,muted,false));
+        if(month.incompleteCount>0) box.addView(text(month.incompleteCount+" sem valor identificado; complemente no extrato.",12,0xff9b6b22,false));
+        space(box,16);box.addView(text("Comparação com o mês anterior",15,ink,true));
+        if(month.previousCount==0) box.addView(text("Sem lançamentos capturados no mês anterior para comparar.",13,muted,false));
+        else {
+            comparison(box,"Receitas",month.current.receipts,month.previous.receipts);
+            comparison(box,"Gastos",month.current.expenses,month.previous.expenses);
+            comparison(box,"Resultado",month.current.result(),month.previous.result());
+        }
+        box.addView(text(monthOffset==0 ? "Mês atual em andamento versus mês anterior completo. Os valores refletem as notificações capturadas." : "Comparação entre meses completos, com os dados capturados.",12,muted,false));
+        space(box,16);box.addView(text("Principais categorias de gastos",15,ink,true));space(box,8);
+        java.util.ArrayList<java.util.Map.Entry<String,Long>> categories=month.topCategories();
+        if(categories.isEmpty()) box.addView(text("Nenhuma saída capturada neste mês.",13,muted,false));
+        for(java.util.Map.Entry<String,Long> item:categories) {
+            LinearLayout line=row();line.addView(text(item.getKey(),14,ink,false),new LinearLayout.LayoutParams(0,-2,1));line.addView(text(amount(item.getValue()),13,muted,true));box.addView(line);
+            progress(box,month.current.expenses==0 ? 0 : (int)(100.0*item.getValue()/month.current.expenses),green);
+        }
+    }
+    private void comparison(LinearLayout box,String label,long current,long previous) {
+        long delta=current-previous;
+        String change=hidden ? "••••" : (delta>0 ? "+" : "")+money.format(delta/100.0);
+        if(!hidden && previous>0) change+=String.format(new Locale("pt","BR")," (%+.1f%%)",100.0*delta/previous);
+        box.addView(text(label+": "+change+" · anterior: "+amount(previous),13,muted,false));
+    }
+
     private double categoryTotal(String category) { double sum = 0; for (Entry e : entries) if (e.value < 0 && e.category.startsWith(category + " ·")) sum -= e.value; return sum; }
     private void go(String target) { page = target; render(); }
     private void title(String heading, String subtitle) { content.addView(text(heading, 27, ink, true)); space(content, 6); content.addView(text(subtitle, 14, muted, false)); space(content, 22); }
     private TextView section(String heading, String action) { LinearLayout line = row(); line.addView(text(heading, 17, ink, true), new LinearLayout.LayoutParams(0, -2, 1)); TextView link = text(action, 12, green, true); link.setPadding(dp(8), dp(12), 0, dp(12)); line.addView(link); content.addView(line); space(content, 8); return link; }
     private LinearLayout metric(String label, double amount, int color) { LinearLayout box = card(Color.WHITE); box.addView(text(label, 13, color, true)); space(box, 8); box.addView(text(hidden ? "••••" : money.format(amount), 19, ink, true)); return box; }
-    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.record.incomplete ? "?" : e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.record.kind.label + (duplicateIds.contains(e.id) ? " · Possível duplicata" : ""),11,duplicateIds.contains(e.id) ? 0xff9b6b22 : green,true)); detail.addView(text(e.category, 11, muted, false)); if(!e.record.categoryManual && !e.record.category.equals("Outros")) detail.addView(text("Categoria automática",11,green,false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.record.incomplete ? "Sem valor" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value))), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
+    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.record.incomplete ? "?" : e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.record.kind.label + (duplicateIds.contains(e.id) ? " · Possível duplicata" : ""),11,duplicateIds.contains(e.id) ? 0xff9b6b22 : green,true)); detail.addView(text(e.category, 11, muted, false)); TextView quick=text("Editar rápido",12,green,true);quick.setPadding(0,dp(12),dp(12),dp(12));quick.setOnClickListener(v -> quickEdit(e.record));detail.addView(quick); if(!e.record.categoryManual && !e.record.category.equals("Outros")) detail.addView(text("Categoria automática",11,green,false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.record.incomplete ? "Sem valor" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value))), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
     private void category(LinearLayout box, String name, double amount, int color) { LinearLayout line = row(); line.addView(text(name, 14, ink, false), new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : money.format(amount), 13, muted, true)); box.addView(line); progress(box, summary.expenses == 0 ? 0 : (int)(amount / (summary.expenses / 100.0) * 100), color); }
     private void budget(LinearLayout box, String name, double spent, double limit) { box.addView(text(name, 15, ink, true)); space(box, 6); box.addView(text(money.format(spent) + " de " + money.format(limit), 13, muted, false)); progress(box, (int)(spent / limit * 100), spent > limit ? 0xffbd674e : green); }
     private void progress(LinearLayout box, int percent, int color) { ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setMax(100); bar.setProgress(Math.min(percent, 100)); bar.setProgressTintList(android.content.res.ColorStateList.valueOf(color)); bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffe9eee7)); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(8)); lp.setMargins(0, dp(12), 0, dp(18)); box.addView(bar, lp); }

@@ -10,7 +10,7 @@ import java.util.HashSet;
 
 /** Valores em centavos. Exclusões e capturas unidas mantêm identidade para não reaparecer. */
 public final class CaptureStore extends SQLiteOpenHelper {
-    public CaptureStore(Context context) { super(context, "captures.db", null, 5); }
+    public CaptureStore(Context context) { super(context, "captures.db", null, 6); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE captures (_id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, raw TEXT NOT NULL, name TEXT NOT NULL, cents INTEGER NOT NULL, category TEXT NOT NULL, captured INTEGER NOT NULL, pending INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '', edited INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'Nubank', kind TEXT NOT NULL DEFAULT 'UNKNOWN', counterparty TEXT NOT NULL DEFAULT '', category_key TEXT NOT NULL DEFAULT '', category_manual INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE INDEX captures_time ON captures(captured)");
@@ -19,6 +19,7 @@ public final class CaptureStore extends SQLiteOpenHelper {
         watch(db, "captures");
         createDecisions(db);
         createCategoryRules(db);
+        createUndo(db);
     }
     private void watch(SQLiteDatabase db, String table) {
         for (String operation : new String[]{"INSERT", "UPDATE", "DELETE"})
@@ -32,6 +33,10 @@ public final class CaptureStore extends SQLiteOpenHelper {
     private void createCategoryRules(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE category_rules (identity TEXT PRIMARY KEY NOT NULL, category TEXT NOT NULL)");
         watch(db,"category_rules");
+    }
+    private void createUndo(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE deletion_batches (_id INTEGER PRIMARY KEY AUTOINCREMENT, expires INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE deletion_items (batch INTEGER NOT NULL, capture_id INTEGER PRIMARY KEY, previous_pending INTEGER NOT NULL)");
     }
     private String learnedCategory(SQLiteDatabase db,String key) {
         if (key.isEmpty()) return "Outros";
@@ -71,6 +76,7 @@ public final class CaptureStore extends SQLiteOpenHelper {
                 }
             }
         }
+            if (oldVersion < 6) createUndo(db);
     }
     private NotificationParser.Result parse(String source, String raw) {
         return source.startsWith("Gmail") ? GmailTransferParser.parse("", raw) : NotificationParser.parse(raw);
@@ -205,6 +211,81 @@ public final class CaptureStore extends SQLiteOpenHelper {
             db.update("duplicate_decisions",v,"kept_id=? AND status=1",new String[]{String.valueOf(keep)});
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
+    }
+    /** Atualiza somente os detalhes; preserva os valores mais recentes da captura. */
+    public boolean editDetails(long id, String category, String notes, boolean remember) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            ArrayList<Record> rows=query("_id=? AND pending IN (0,1)",new String[]{String.valueOf(id)});
+            if(rows.isEmpty()) return false;
+            Record r=rows.get(0);
+            edit(id,r.name,r.cents,category,notes,r.kind,r.counterparty,remember);
+            db.setTransactionSuccessful();return true;
+        } finally {db.endTransaction();}
+    }
+    public static final long UNDO_WINDOW_MS=10000;
+    public static final class Deletion {
+        public final long id,expires;
+        Deletion(long id,long expires) {this.id=id;this.expires=expires;}
+    }
+    /** Preserva os dados e os vínculos durante a janela de recuperação. */
+    public boolean deleteWithUndo(long id,long now) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            ArrayList<Record> rows=query("_id=? AND pending IN (0,1)",new String[]{String.valueOf(id)});
+            if(rows.isEmpty()) return false;
+            ArrayList<Record> linked=linkedRecords(id);linked.add(rows.get(0));
+            ContentValues batch=new ContentValues();batch.put("expires",now+UNDO_WINDOW_MS);
+            long batchId=db.insertOrThrow("deletion_batches",null,batch);
+            for(Record r:linked) {
+                ContentValues item=new ContentValues();item.put("batch",batchId);item.put("capture_id",r.id);
+                item.put("previous_pending",r.id==id ? (r.incomplete ? 1 : 0) : 3);
+                db.insertOrThrow("deletion_items",null,item);
+                ContentValues hidden=new ContentValues();hidden.put("pending",2);
+                db.update("captures",hidden,"_id=?",new String[]{String.valueOf(r.id)});
+            }
+            db.setTransactionSuccessful();return true;
+        } finally {db.endTransaction();}
+    }
+    public Deletion latestDeletion(long now) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT _id,expires FROM deletion_batches WHERE expires>? ORDER BY _id DESC LIMIT 1",new String[]{String.valueOf(now)})) {
+            return c.moveToFirst() ? new Deletion(c.getLong(0),c.getLong(1)) : null;
+        }
+    }
+    public boolean undoDeletion(long batch,long now) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            try(Cursor c=db.rawQuery("SELECT expires FROM deletion_batches WHERE _id=?",new String[]{String.valueOf(batch)})) {
+                if(!c.moveToFirst() || c.getLong(0)<=now) return false;
+            }
+            try(Cursor c=db.rawQuery("SELECT capture_id,previous_pending FROM deletion_items WHERE batch=?",new String[]{String.valueOf(batch)})) {
+                while(c.moveToNext()) {
+                    ContentValues v=new ContentValues();v.put("pending",c.getInt(1));
+                    db.update("captures",v,"_id=? AND pending=2",new String[]{String.valueOf(c.getLong(0))});
+                }
+            }
+            removeDeletion(db,batch);db.setTransactionSuccessful();return true;
+        } finally {db.endTransaction();}
+    }
+    public void purgeExpiredDeletions(long now) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            ArrayList<Long> expired=new ArrayList<>();
+            try(Cursor c=db.rawQuery("SELECT _id FROM deletion_batches WHERE expires<=?",new String[]{String.valueOf(now)})) {
+                while(c.moveToNext()) expired.add(c.getLong(0));
+            }
+            for(long batch:expired) {
+                try(Cursor c=db.rawQuery("SELECT capture_id FROM deletion_items WHERE batch=?",new String[]{String.valueOf(batch)})) {
+                    while(c.moveToNext()) clear(db,c.getLong(0));
+                }
+                removeDeletion(db,batch);
+            }
+            db.setTransactionSuccessful();
+        } finally {db.endTransaction();}
+    }
+    private void removeDeletion(SQLiteDatabase db,long batch) {
+        String[] args={String.valueOf(batch)};
+        db.delete("deletion_items","batch=?",args);db.delete("deletion_batches","_id=?",args);
     }
     public void discard(long id) {
         SQLiteDatabase db=getWritableDatabase(); db.beginTransaction();

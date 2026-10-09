@@ -36,7 +36,7 @@ A leitura depende do acesso concedido e do conteúdo disponibilizado pelo Androi
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-O código principal e os testes compilaram diretamente com javac; 54 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
+O código principal e os testes compilaram diretamente com javac; 59 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
 
 Referência Android: https://developer.android.com/reference/android/app/Notification.html
 
@@ -82,4 +82,23 @@ Períodos: todo o histórico, hoje, últimos sete dias (hoje + seis dias anterio
 
 O extrato exibe quantidade de registros e resultado do conjunto filtrado, mantendo todas as entradas/saídas conhecidas, inclusive faturas e valores sem classificação, conforme a regra de cálculo atual. Os filtros não alteram o resumo geral. Registros apagados e capturas unidas continuam fora dos totais duplicados. A data usada é a de captura da notificação, não a data contábil confirmada pelo banco.
 
-Os 54 testes unitários incluem identidades para categorias, pesquisa, limites de período, conversão UTC do calendário e horário de verão histórico. Os testes instrumentados adicionais cobrem aprendizagem persistente, exceções locais, fontes diferentes, proteção de edições e migração das versões 3 e 4 para 5. Foram compilados; a execução instrumentada e a conferência visual ainda requerem aparelho/emulador fora das restrições deste ambiente.
+Os 59 testes unitários incluem identidades para categorias, pesquisa, limites de período, conversão UTC do calendário e horário de verão histórico. Os testes instrumentados adicionais cobrem aprendizagem persistente, exceções locais, fontes diferentes, proteção de edições e migração das versões 3, 4 e 5 para 6. Foram compilados; a execução instrumentada e a conferência visual ainda requerem aparelho/emulador fora das restrições deste ambiente.
+
+
+## Etapa 5 — Edição rápida e exclusão com Desfazer
+
+Cada movimentação tem o atalho **Editar rápido** para categoria e observações. Ele preserva descrição, valor, natureza e destinatário mais recentes; também permite escolher se a categoria deve ser lembrada para capturas futuras. **Editar todos os campos** abre o formulário completo.
+
+Ao apagar pelo formulário completo ou pela edição rápida, o lançamento sai imediatamente dos totais. A barra **Desfazer exclusão** fica disponível por até 10 segundos, inclusive ao navegar entre telas ou recriar a atividade. A recuperação restaura os detalhes e as fontes unidas, mantendo somente o lançamento principal nos totais. Exclusões sucessivas podem ser desfeitas da mais recente para a anterior enquanto cada prazo estiver aberto.
+
+O banco na versão 6 guarda temporariamente o estado anterior da exclusão. Após o prazo, os detalhes são limpos na próxima verificação do app; se estiver fechado, a limpeza ocorre ao reabrir. A identidade da notificação permanece para impedir recaptura. A recuperação já é recusada ao vencer o prazo, mesmo antes da limpeza. A migração preserva os registros e as regras existentes.
+
+## Etapa 6 — Resumo mensal
+
+A tela inicial mantém o resultado geral de todo o histórico e acrescenta **Resumo mensal**, com seleção de meses anteriores e retorno ao mês atual. Exibe receitas, gastos, resultado, quantidade de lançamentos e categorias ordenadas pelos maiores gastos, incluindo **Outros**.
+
+A comparação mostra diferenças em reais e, quando a base anterior é positiva, em porcentagem. Sem registros no mês anterior, informa que não há base de comparação. O mês atual em andamento é explicitamente comparado ao mês anterior completo. Os períodos usam a data local de captura da notificação, não uma data de transação inferida do texto.
+
+Todas as saídas com valor conhecido entram nos totais, inclusive faturas e lançamentos sem classificação. Registros sem valor são informados separadamente. Fontes já unidas e registros apagados ficam fora, como no resultado geral.
+
+Validação: 59 testes unitários passaram, incluindo limites de mês, mudança de ano, fevereiro bissexto, categorias, faturas e valores sem classificação. Código principal e testes instrumentados compilaram com Java 11. Novos testes instrumentados cobrem edição rápida, recuperação após reabrir o banco, expiração, exclusões sucessivas, fontes unidas e migração da versão 5. A execução desses testes e a validação visual ainda precisam de aparelho/emulador; o ambiente continua com as restrições de Gradle/ADB descritas acima.
