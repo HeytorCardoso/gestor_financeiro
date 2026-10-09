@@ -12,7 +12,7 @@ public final class NotificationParser {
     private static final Pattern FAILED = Pattern.compile("\\b(?:recusad[oa]|cancelad[oa]|agendad[oa]|pendente|falhou|estornad[oa])\\b|\\bnao\\s+(?:foi\\s+)?(?:realizad[oa]|concluid[oa]|aprovad[oa])\\b");
     private static final Pattern IN = Pattern.compile("\\brecebeu\\b|\\brecebid[oa]\\b|\\brecebimento\\b|\\bpix\\s+na\\s+sua\\s+conta\\b");
     private static final Pattern OUT = Pattern.compile("\\bvoce\\s+(?:enviou|transferiu)\\b|\\b(?:pix|transferencia)\\s+(?:foi\\s+)?(?:enviad[oa]|realizad[oa]|concluid[oa]|efetuad[oa]|feit[oa])\\b|\\bvoce\\s+(?:fez|realizou)\\s+(?:um(?:a)?\\s+)?(?:pix|transferencia)\\b|\\bcomprovante\\s+(?:de\\s+)?(?:pix|transferencia)\\b");
-    private static final Pattern PURCHASE = Pattern.compile("\\bcompra\\b[\\s\\S]*\\baprovad[oa]\\b|\\bcompra\\s+(?:de|realizada|efetuada)\\b|\\bcompra\\s+(?:no|com\\s+(?:o|seu))\\s+cartao\\b|\\bvoce\\s+(?:acabou\\s+de\\s+)?(?:fez|fazer|realizou)\\s+uma\\s+compra\\b");
+    private static final Pattern PURCHASE = Pattern.compile("\\bcompra\\b[\\s\\S]*\\baprovad[oa]\\b|\\bcompra\\s+(?:de|realizada|efetuada|no\\s+credito|no\\s+debito)\\b|\\bcompra\\s+(?:no|com\\s+(?:o|seu))\\s+cartao\\b|\\bvoce\\s+(?:acabou\\s+de\\s+)?(?:fez|fazer|realizou)\\s+uma\\s+compra\\b");
     private static final Pattern BOLETO = Pattern.compile("\\bboleto\\b[\\s\\S]*\\b(?:sucesso|realizado|pago|efetuado)\\b|\\b(?:pagamento\\s+(?:de\\s+)?boleto|boleto\\s+pago)\\b");
 
     static String fold(String value) {
@@ -34,16 +34,35 @@ public final class NotificationParser {
         boolean outgoing = OUT.matcher(folded).find() || isSuccessfulTransferToRecipient(folded);
         boolean purchase = PURCHASE.matcher(folded).find();
         boolean boleto = BOLETO.matcher(folded).find();
+        boolean invoice = Pattern.compile("\\bfatura\\b").matcher(folded).find()
+                && Pattern.compile("\\b(?:paga|pago|pagou)\\b|\\bpagamento\\b[\\s\\S]*\\b(?:recebido|efetuado|realizado|confirmado|sucesso)\\b").matcher(folded).find();
+        // O recebimento do pagamento de fatura confirma a liquidação; não é receita.
+        if (invoice) { incoming = false; purchase = false; outgoing = true; }
         if (incoming && (outgoing || purchase || boleto)) return null;
         if (!incoming && !outgoing && !purchase && !boleto) return null;
         Long cents = amount(text);
         if (cents == null) return null;
         String name;
-        if (purchase) name = party(text, true, false);
+        if (invoice) name = "Pagamento de fatura";
+        else if (purchase) name = party(text, true, false);
         else if (boleto) name = "Pagamento de boleto";
         else name = party(text, false, incoming);
         if (name == null) name = purchase ? "Compra no cartão" : incoming ? "Pix recebido" : "Transferência enviada";
-        return new Result(name, incoming ? cents : -cents);
+        TransactionKind kind;
+        if (invoice) kind = TransactionKind.INVOICE_PAYMENT;
+        else if (purchase) {
+            boolean debit = paymentMode(folded,"debito"), credit = paymentMode(folded,"credito");
+            kind = debit == credit ? TransactionKind.CARD_UNSPECIFIED : debit ? TransactionKind.ACCOUNT_EXPENSE : TransactionKind.CREDIT_PURCHASE;
+        } else kind = boleto ? TransactionKind.ACCOUNT_EXPENSE : TransactionKind.ACCOUNT_TRANSFER;
+        String counterparty = "";
+        if (kind == TransactionKind.ACCOUNT_TRANSFER) {
+            String party = party(text, false, incoming);
+            if (party != null) counterparty = party.replaceFirst("^(?:Pix de |Pix para |Transferência de |Transferência para )", "");
+        }
+        return new Result(name, incoming ? cents : -cents, kind, counterparty);
+    }
+    private static boolean paymentMode(String folded,String mode) {
+        return Pattern.compile("\\b(?:no|na|funcao|modalidade)\\s+" + mode + "\\b|\\bcartao\\s+(?:de\\s+)?" + mode + "\\b|(?:^|\\n)\\s*" + mode + "\\s*(?:$|\\n)").matcher(folded).find();
     }
     private static Long amount(String text) {
         Matcher m = AMOUNT.matcher(text); Long found = null;
@@ -72,7 +91,11 @@ public final class NotificationParser {
         return null;
     }
     public static final class Result {
-        public final String name; public final long cents;
-        Result(String name, long cents) { this.name = name; this.cents = cents; }
+        public final String name, counterparty; public final long cents;
+        public final TransactionKind kind;
+        Result(String name, long cents) { this(name, cents, TransactionKind.UNKNOWN, ""); }
+        Result(String name, long cents, TransactionKind kind, String counterparty) {
+            this.name = name; this.cents = cents; this.kind = kind; this.counterparty = counterparty;
+        }
     }
 }

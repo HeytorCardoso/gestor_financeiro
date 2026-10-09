@@ -27,6 +27,9 @@ public class MainActivity extends AppCompatActivity {
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable refresh = new Runnable() { public void run() { if (store.revision() != lastRevision || !captureState().equals(lastStatus)) { loadEntries(); render(); } refreshHandler.postDelayed(this, 1500); } };
     private final ArrayList<Entry> entries = new ArrayList<>();
+    private FinancialSummary summary = new FinancialSummary();
+    private ArrayList<CaptureStore.Duplicate> duplicates = new ArrayList<>();
+    private final java.util.HashSet<Long> duplicateIds = new java.util.HashSet<>();
     private final NumberFormat money = NumberFormat.getCurrencyInstance(new Locale("pt", "BR"));
 
     @Override public void onCreate(Bundle state) {
@@ -58,7 +61,12 @@ public class MainActivity extends AppCompatActivity {
     private void loadEntries() {
         lastRevision = store.revision();
         entries.clear();
-        for (CaptureStore.Record r : store.records(false)) entries.add(new Entry(r));
+        summary = new FinancialSummary();
+        for (CaptureStore.Record r : store.records(false)) {
+            entries.add(new Entry(r)); summary.add(r.cents,r.kind,r.incomplete);
+        }
+        duplicates = store.possibleDuplicates(); duplicateIds.clear();
+        for (CaptureStore.Duplicate d : duplicates) { duplicateIds.add(d.first.id); duplicateIds.add(d.second.id); }
     }
     private boolean authorized() {
         String enabled = android.provider.Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
@@ -126,12 +134,25 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout balance = card(green); content.addView(balance); 
         LinearLayout top = row(); top.addView(text("RESULTADO DOS LANÇAMENTOS", 12, 0xffd3e8dd, true), new LinearLayout.LayoutParams(0, -2, 1));
         TextView eye = text(hidden ? "Mostrar" : "Ocultar", 12, Color.WHITE, true); top.addView(eye); eye.setPadding(dp(8), dp(10), dp(8), dp(10)); eye.setOnClickListener(v -> { hidden = !hidden; render(); }); balance.addView(top);
-        balance.addView(text(hidden ? "••••••" : money.format(total(true) - total(false)), 34, Color.WHITE, true));
-        space(balance, 8); balance.addView(text("Entradas menos saídas · Não é saldo bancário", 12, 0xffd3e8dd, false));
+        balance.addView(text(hidden ? "••••••" : money.format(summary.result() / 100.0), 34, Color.WHITE, true));
+        space(balance, 8); balance.addView(text("Receitas menos gastos · Inclui valores a classificar", 12, 0xffd3e8dd, false));
+        space(balance, 8); balance.addView(text("Movimentação da conta: " + (hidden ? "••••" : money.format(summary.accountNet() / 100.0)) + " · Natureza identificada", 12, 0xffd3e8dd, false));
         space(content, 14); LinearLayout metrics = row();
-        metrics.addView(metric("↗  Receitas", total(true), green), new LinearLayout.LayoutParams(0, -2, 1));
+        metrics.addView(metric("↗  Entradas na conta", summary.income / 100.0, green), new LinearLayout.LayoutParams(0, -2, 1));
         Space gap = new Space(this); metrics.addView(gap, new LinearLayout.LayoutParams(dp(12), 1));
-        metrics.addView(metric("↘  Despesas", total(false), 0xffbd674e), new LinearLayout.LayoutParams(0, -2, 1)); content.addView(metrics);
+        metrics.addView(metric("↘  Saídas da conta", summary.accountOut / 100.0, 0xffbd674e), new LinearLayout.LayoutParams(0, -2, 1)); content.addView(metrics);
+        space(content, 14);
+        LinearLayout spending = card(Color.WHITE); content.addView(spending);
+        spending.addView(text("Gastos capturados", 17, ink, true)); space(spending, 6);
+        spending.addView(text(hidden ? "••••" : money.format(summary.expenses / 100.0), 27, green, true));
+        spending.addView(text("Soma todas as saídas capturadas, incluindo compras, faturas e valores sem classificação.", 12, muted, false));
+        space(spending, 12);
+        spending.addView(text("Compras no crédito: " + (hidden ? "••••" : money.format(summary.creditPurchases / 100.0)), 14, ink, true));
+        spending.addView(text("Faturas pagas: " + (hidden ? "••••" : money.format(summary.invoicePayments / 100.0)) + " · incluídas nas saídas da conta", 12, muted, false));
+        if (summary.unclassified > 0) {
+            space(spending, 10); spending.addView(text("A classificar: " + (hidden ? "••••" : money.format(summary.unclassified / 100.0)) + ". Já incluídos no resultado; a classificação define como afetam a conta.", 13, 0xff9b6b22, true));
+        }
+        duplicateNotice();
         space(content, 18); button(content, "Configurar captura", () -> go("Captura"));
         space(content, 24); section("Para onde vai seu dinheiro", "Capturado");
         LinearLayout expenses = card(Color.WHITE); content.addView(expenses);
@@ -145,18 +166,79 @@ public class MainActivity extends AppCompatActivity {
 
     private void statement() {
         title("Movimentações", "Notificações capturadas · Toque para editar.");
-        LinearLayout tabs = row();
-        for (String option : new String[]{"Todas", "Receitas", "Despesas"}) {
-            TextView tab = text(option, 13, filter.equals(option) ? Color.WHITE : green, true); tab.setGravity(Gravity.CENTER); tab.setBackground(shape(filter.equals(option) ? green : 0xffe5eee5, 16)); tab.setPadding(dp(8), dp(14), dp(8), dp(14));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1); lp.setMargins(0, 0, dp(6), 0); tabs.addView(tab, lp);
-            tab.setOnClickListener(v -> { filter = option; render(); });
+        HorizontalScrollView scroller = new HorizontalScrollView(this); scroller.setHorizontalScrollBarEnabled(false);
+        LinearLayout tabs = row(); scroller.addView(tabs);
+        for (String option : new String[]{"Todas", "Conta", "Crédito", "Faturas", "A classificar", "Duplicatas"}) {
+            TextView tab = text(option, 13, filter.equals(option) ? Color.WHITE : green, true);
+            tab.setGravity(Gravity.CENTER); tab.setBackground(shape(filter.equals(option) ? green : 0xffe5eee5,16));
+            tab.setPadding(dp(16),dp(14),dp(16),dp(14));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.setMargins(0,0,dp(6),0); tabs.addView(tab,lp);
+            tab.setOnClickListener(v -> {filter=option;render();});
         }
-        content.addView(tabs); space(content, 20);
+        content.addView(scroller); space(content,16); duplicateNotice();
         LinearLayout list = card(Color.WHITE); content.addView(list);
         int count = 0;
-        for (Entry e : entries) if (filter.equals("Todas") || (filter.equals("Receitas") && e.value > 0) || (filter.equals("Despesas") && e.value < 0)) { transaction(list, e); count++; }
+        for (Entry e : entries) if (matchesFilter(e)) { transaction(list, e); count++; }
         if (count == 0) list.addView(text("Nenhuma movimentação por aqui.", 14, muted, false));
         space(content, 20);
+    }
+
+    private void showPanel(com.google.android.material.bottomsheet.BottomSheetDialog dialog,ScrollView scroll) {
+        dialog.setContentView(scroll);
+        dialog.setOnShowListener(d -> {
+            android.view.View sheet=dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
+            if (sheet!=null) {
+                sheet.setBackground(shape(background,26));
+                com.google.android.material.bottomsheet.BottomSheetBehavior<android.view.View> behavior=com.google.android.material.bottomsheet.BottomSheetBehavior.from(sheet);
+                behavior.setState(com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED);
+                behavior.setSkipCollapsed(true);
+            }
+            if (dialog.getWindow()!=null) dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }); dialog.show();
+    }
+    private boolean matchesFilter(Entry e) {
+        if (filter.equals("Conta")) return e.record.kind.affectsAccount();
+        if (filter.equals("Crédito")) return e.record.kind == TransactionKind.CREDIT_PURCHASE;
+        if (filter.equals("Faturas")) return e.record.kind == TransactionKind.INVOICE_PAYMENT;
+        if (filter.equals("A classificar")) return e.record.incomplete || e.record.kind == TransactionKind.UNKNOWN || e.record.kind == TransactionKind.CARD_UNSPECIFIED;
+        if (filter.equals("Duplicatas")) return duplicateIds.contains(e.id);
+        return true;
+    }
+    private void duplicateNotice() {
+        if (duplicates.isEmpty()) return;
+        space(content,14); LinearLayout notice=card(0xfffaf0dc); content.addView(notice);
+        notice.addView(text("Possível duplicidade",17,0xff9b6b22,true)); space(notice,6);
+        notice.addView(text("Há registros semelhantes entre Nubank e Gmail. Os totais incluem ambos até você resolver. Nenhum lançamento foi apagado automaticamente.",13,ink,false));
+        space(notice,12); button(notice,"Comparar registros (" + duplicates.size() + ")",() -> compareDuplicate(duplicates.get(0),duplicates.get(0).first.id));
+        space(content,12);
+    }
+    private void compareDuplicate(CaptureStore.Duplicate duplicate,long preferred) {
+        com.google.android.material.bottomsheet.BottomSheetDialog dialog=new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        ScrollView scroll=new ScrollView(this); LinearLayout form=card(background); scroll.addView(form);
+        form.addView(text("É a mesma transação?",24,ink,true)); space(form,8);
+        form.addView(text(duplicate.reason,14,muted,false));
+        CaptureStore.Record kept=duplicate.first.id==preferred ? duplicate.first : duplicate.second;
+        CaptureStore.Record other=duplicate.first.id==preferred ? duplicate.second : duplicate.first;
+        for (CaptureStore.Record r:new CaptureStore.Record[]{kept,other}) {
+            space(form,16); LinearLayout box=card(Color.WHITE); form.addView(box);
+            box.addView(text(r.source,13,green,true)); space(box,6);
+            box.addView(text(r.name,18,ink,true));
+            box.addView(text(hidden ? "••••" : money.format(Math.abs(r.cents)/100.0),22,ink,true));
+            box.addView(text(java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(r.time)),12,muted,false));
+            if (!r.counterparty.isEmpty()) box.addView(text("Destinatário: " + r.counterparty,13,muted,false));
+            box.addView(text("Categoria: " + r.category,13,muted,false));
+            if (!r.notes.isEmpty()) box.addView(text("Observações: " + r.notes,13,muted,false));
+            space(box,8); box.addView(text(r.raw,12,muted,false));
+        }
+        space(form,16);
+        form.addView(text("Se unir, o lançamento de " + kept.source + " permanece nos totais. Os dados do outro ficam associados e preservados. Você pode desfazer a união no editor.",13,muted,false));
+        space(form,14); button(form,"É a mesma transação · Unir",() -> {
+            boolean merged=store.merge(kept.id,other.id); loadEntries(); dialog.dismiss(); render();
+            Toast.makeText(this,merged ? "Lançamentos unidos. Agora contam uma vez." : "Os registros mudaram. Confira novamente.",Toast.LENGTH_LONG).show();
+        });
+        space(form,10); button(form,"São operações diferentes",() -> {store.markDifferent(kept.id,other.id);loadEntries();dialog.dismiss();render();});
+        space(form,10); TextView close=text("Decidir depois",14,green,true); close.setGravity(Gravity.CENTER); close.setPadding(0,dp(16),0,dp(16)); form.addView(close); close.setOnClickListener(v -> dialog.dismiss());
+        showPanel(dialog,scroll);
     }
 
     private void planning() {
@@ -198,7 +280,7 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout gmail = card(Color.WHITE); content.addView(gmail);
         gmail.addView(text("Notificações do Gmail", 17, ink, true)); space(gmail, 8);
         gmail.addView(text(getSharedPreferences("capture", MODE_PRIVATE).getString("gmailStatus", "Ainda não foi recebida uma notificação do Gmail. Confira se os avisos desses e-mails estão ativados no Gmail."), 13, muted, false));
-        space(content, 12); content.addView(text("Lançamentos reconhecidos entram automaticamente. Notificações sem dados suficientes aparecem no extrato como incompletas e ficam fora dos totais até você informar o valor. A captura depende de o Android disponibilizar a notificação; pagamentos e compras podem representar o mesmo gasto, revise antes de somar.", 12, muted, false));
+        space(content, 12); content.addView(text("Lançamentos reconhecidos entram automaticamente. Notificações sem dados suficientes aparecem no extrato como incompletas e ficam fora dos totais até você informar o valor. Compras no crédito e pagamentos de fatura são separados automaticamente quando identificados. Possíveis repetições entre fontes são sinalizadas no extrato.", 12, muted, false));
     }
     private void review(Entry entry) { editEntry(entry.record); }
 
@@ -235,10 +317,33 @@ public class MainActivity extends AppCompatActivity {
         source.addView(text(java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(r.time)), 12, muted, false));
         if (r.incomplete) { space(source, 8); source.addView(text("Dados incompletos. Informe o valor para incluir nos totais.", 13, ink, false)); }
         space(form, 16);
+        if (duplicateIds.contains(r.id)) {
+            space(form,12); button(form,"Comparar possível duplicata", () -> {
+                dialog.dismiss();
+                for (CaptureStore.Duplicate d:duplicates) if (d.first.id==r.id || d.second.id==r.id) { compareDuplicate(d,r.id); break; }
+            });
+        }
+        ArrayList<CaptureStore.Record> linked = store.linkedRecords(r.id);
+        if (!linked.isEmpty()) {
+            space(form,12); form.addView(text("Fontes associadas · Contadas uma única vez",16,green,true));
+            for (CaptureStore.Record l:linked) {
+                LinearLayout saved=card(Color.WHITE); space(form,8); form.addView(saved);
+                saved.addView(text(l.source + " · " + l.name,14,ink,true));
+                saved.addView(text(l.kind.label + " · " + l.category + " · " + (hidden ? "••••" : money.format(Math.abs(l.cents)/100.0)),12,muted,false));
+                saved.addView(text(l.raw,12,muted,false));
+                if (!l.notes.isEmpty()) saved.addView(text("Observações preservadas: " + l.notes,12,muted,false));
+            }
+            space(form,8); button(form,"Desfazer união dos lançamentos", () -> {store.undoMerge(r.id);loadEntries();dialog.dismiss();render();});
+        }
         int plain = android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
         com.google.android.material.textfield.TextInputEditText name = input(form, "Descrição", r.name, plain);
         com.google.android.material.textfield.TextInputEditText value = input(form, "Valor (R$)", r.cents == 0 ? "" : java.math.BigDecimal.valueOf(r.cents).abs().movePointLeft(2).toPlainString().replace('.', ','), android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
         com.google.android.material.textfield.MaterialAutoCompleteTextView type = dropdown(form, "Tipo", r.cents > 0 ? "Receita" : "Despesa", new String[]{"Despesa", "Receita"});
+        String[] natures = new String[TransactionKind.values().length];
+        for (int i=0;i<natures.length;i++) natures[i]=TransactionKind.values()[i].label;
+        com.google.android.material.textfield.MaterialAutoCompleteTextView nature = dropdown(form,"Natureza financeira",r.kind.label,natures);
+        form.addView(text("Todas as saídas entram nos gastos, inclusive faturas. A natureza organiza os detalhes da movimentação.",12,muted,false));
+        com.google.android.material.textfield.TextInputEditText counterparty = input(form,"Destinatário / remetente (opcional)",r.counterparty,plain);
         com.google.android.material.textfield.MaterialAutoCompleteTextView category = dropdown(form, "Categoria", r.category, new String[]{"Alimentação", "Casa", "Mobilidade", "Trabalho", "Saúde", "Lazer", "Outros"});
         com.google.android.material.textfield.TextInputEditText notes = input(form, "Observações (opcional)", r.notes, plain | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE); notes.setMinLines(2);
         space(form, 12); LinearLayout original = card(Color.WHITE); form.addView(original);
@@ -249,13 +354,17 @@ public class MainActivity extends AppCompatActivity {
                 String entered = value.getText().toString().trim();
                 long cents = entered.isEmpty() && r.incomplete ? 0 : new java.math.BigDecimal(entered.replace(',', '.')).movePointRight(2).longValueExact();
                 if (cents < 0 || (cents == 0 && !r.incomplete)) throw new ArithmeticException();
-                store.edit(r.id, name.getText().toString().trim(), type.getText().toString().equals("Receita") ? cents : -cents, category.getText().toString(), notes.getText().toString().trim());
+                TransactionKind kind = TransactionKind.fromLabel(nature.getText().toString());
+                if (type.getText().toString().equals("Receita") && kind != TransactionKind.ACCOUNT_TRANSFER && kind != TransactionKind.UNKNOWN) {
+                    nature.setError("Para receitas, escolha Pix / transferência"); nature.requestFocus(); return;
+                }
+                store.edit(r.id,name.getText().toString().trim(),type.getText().toString().equals("Receita") ? cents : -cents,category.getText().toString(),notes.getText().toString().trim(),kind,counterparty.getText().toString());
                 loadEntries(); dialog.dismiss(); render(); Toast.makeText(this, "Alterações salvas", Toast.LENGTH_SHORT).show();
             } catch (NumberFormatException | ArithmeticException ex) { value.setError("Use um valor positivo com até 2 casas decimais"); value.requestFocus(); }
         });
         space(form, 8); TextView cancel = text("Voltar sem alterar", 14, green, true); cancel.setGravity(Gravity.CENTER); cancel.setPadding(0, dp(16), 0, dp(16)); form.addView(cancel); cancel.setOnClickListener(v -> dialog.dismiss());
         space(form, 8);
-        TextView remove = text("Apagar lançamento", 14, 0xffb0523e, true); remove.setGravity(Gravity.CENTER); remove.setPadding(0, dp(16), 0, dp(16)); form.addView(remove);
+        TextView remove = text(linked.isEmpty() ? "Apagar lançamento" : "Apagar lançamento e fontes associadas", 14, 0xffb0523e, true); remove.setGravity(Gravity.CENTER); remove.setPadding(0, dp(16), 0, dp(16)); form.addView(remove);
         remove.setOnClickListener(v -> {
             store.discard(r.id); loadEntries(); dialog.dismiss(); render();
             com.google.android.material.snackbar.Snackbar.make(root, "Lançamento apagado", com.google.android.material.snackbar.Snackbar.LENGTH_LONG).show();
@@ -274,14 +383,13 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    private double total(boolean income) { double sum = 0; for (Entry e : entries) if ((e.value > 0) == income) sum += Math.abs(e.value); return sum; }
     private double categoryTotal(String category) { double sum = 0; for (Entry e : entries) if (e.value < 0 && e.category.startsWith(category + " ·")) sum -= e.value; return sum; }
     private void go(String target) { page = target; render(); }
     private void title(String heading, String subtitle) { content.addView(text(heading, 27, ink, true)); space(content, 6); content.addView(text(subtitle, 14, muted, false)); space(content, 22); }
     private TextView section(String heading, String action) { LinearLayout line = row(); line.addView(text(heading, 17, ink, true), new LinearLayout.LayoutParams(0, -2, 1)); TextView link = text(action, 12, green, true); link.setPadding(dp(8), dp(12), 0, dp(12)); line.addView(link); content.addView(line); space(content, 8); return link; }
     private LinearLayout metric(String label, double amount, int color) { LinearLayout box = card(Color.WHITE); box.addView(text(label, 13, color, true)); space(box, 8); box.addView(text(hidden ? "••••" : money.format(amount), 19, ink, true)); return box; }
-    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.record.incomplete ? "?" : e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.category, 11, muted, false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.record.incomplete ? "Sem valor" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value))), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
-    private void category(LinearLayout box, String name, double amount, int color) { LinearLayout line = row(); line.addView(text(name, 14, ink, false), new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : money.format(amount), 13, muted, true)); box.addView(line); progress(box, total(false) == 0 ? 0 : (int)(amount / total(false) * 100), color); }
+    private void transaction(LinearLayout parent, Entry e) { LinearLayout line = row(); line.setPadding(0, dp(12), 0, dp(12)); TextView icon = text(e.record.incomplete ? "?" : e.value > 0 ? "↗" : "↘", 22, e.value > 0 ? green : 0xffbd674e, true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(e.value > 0 ? 0xffe8f1e8 : 0xfff8eee7, 12)); line.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40))); LinearLayout detail = column(); detail.setPadding(dp(12), 0, dp(8), 0); detail.addView(text(e.name, 14, ink, true)); detail.addView(text(e.record.kind.label + (duplicateIds.contains(e.id) ? " · Possível duplicata" : ""),11,duplicateIds.contains(e.id) ? 0xff9b6b22 : green,true)); detail.addView(text(e.category, 11, muted, false)); line.addView(detail, new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : (e.record.incomplete ? "Sem valor" : (e.value > 0 ? "+ " : "− ") + money.format(Math.abs(e.value))), 13, e.value > 0 ? green : ink, true)); line.setOnClickListener(v -> review(e)); parent.addView(line); }
+    private void category(LinearLayout box, String name, double amount, int color) { LinearLayout line = row(); line.addView(text(name, 14, ink, false), new LinearLayout.LayoutParams(0, -2, 1)); line.addView(text(hidden ? "••••" : money.format(amount), 13, muted, true)); box.addView(line); progress(box, summary.expenses == 0 ? 0 : (int)(amount / (summary.expenses / 100.0) * 100), color); }
     private void budget(LinearLayout box, String name, double spent, double limit) { box.addView(text(name, 15, ink, true)); space(box, 6); box.addView(text(money.format(spent) + " de " + money.format(limit), 13, muted, false)); progress(box, (int)(spent / limit * 100), spent > limit ? 0xffbd674e : green); }
     private void progress(LinearLayout box, int percent, int color) { ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); bar.setMax(100); bar.setProgress(Math.min(percent, 100)); bar.setProgressTintList(android.content.res.ColorStateList.valueOf(color)); bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffe9eee7)); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(8)); lp.setMargins(0, dp(12), 0, dp(18)); box.addView(bar, lp); }
     private void button(LinearLayout box, String label, Runnable action) { TextView button = text(label, 15, Color.WHITE, true); button.setGravity(Gravity.CENTER); button.setPadding(dp(12), dp(17), dp(12), dp(17)); button.setBackground(shape(green, 16)); button.setOnClickListener(v -> action.run()); box.addView(button, new LinearLayout.LayoutParams(-1, -2)); }
