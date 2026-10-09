@@ -100,7 +100,25 @@ public class FinanceStoreTest {
         try(CaptureStore store=new CaptureStore(context)) {
             CaptureStore.Record r=store.records(false).get(0);
             assertEquals(-12000,r.cents);assertEquals("Nome personalizado",r.name);assertEquals("Observação antiga",r.notes);
-            assertEquals(TransactionKind.CREDIT_PURCHASE,r.kind);assertEquals(4,store.getReadableDatabase().getVersion());
+            assertEquals(TransactionKind.CREDIT_PURCHASE,r.kind);assertEquals(5,store.getReadableDatabase().getVersion());
+            assertEquals("merchant:loja",r.categoryKey);assertTrue(r.categoryManual);
+        }
+    }
+    @Test public void migratesVersionFourPreservingManualNatureAndCategory() {
+        Context context=isolated("migration4");
+        try(SQLiteDatabase db=context.openOrCreateDatabase("captures.db",Context.MODE_PRIVATE,null,null)) {
+            db.execSQL("CREATE TABLE captures (_id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, raw TEXT NOT NULL, name TEXT NOT NULL, cents INTEGER NOT NULL, category TEXT NOT NULL, captured INTEGER NOT NULL, pending INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '', edited INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'Nubank', kind TEXT NOT NULL DEFAULT 'UNKNOWN', counterparty TEXT NOT NULL DEFAULT '')");
+            db.execSQL("CREATE TABLE changes (revision INTEGER NOT NULL)");db.execSQL("INSERT INTO changes VALUES(0)");
+            db.execSQL("CREATE TABLE duplicate_decisions(a INTEGER NOT NULL,b INTEGER NOT NULL,status INTEGER NOT NULL,kept_id INTEGER,PRIMARY KEY(a,b))");
+            for(String table:new String[]{"captures","duplicate_decisions"}) for(String operation:new String[]{"INSERT","UPDATE","DELETE"}) db.execSQL("CREATE TRIGGER "+table+"_"+operation.toLowerCase(java.util.Locale.ROOT)+" AFTER "+operation+" ON "+table+" BEGIN UPDATE changes SET revision=revision+1; END");
+            db.execSQL("INSERT INTO captures(token,raw,name,cents,category,captured,pending,notes,edited,kind) VALUES(?,?,?,?,?,?,?,?,?,?)",new Object[]{"old","Compra aprovada no crédito de R$ 100,00 em Loja.","Nome personalizado",-12000,"Casa",1000,0,"Observação antiga",1,"ACCOUNT_EXPENSE"});
+            db.setVersion(4);
+        }
+        try(CaptureStore store=new CaptureStore(context)) {
+            CaptureStore.Record r=store.records(false).get(0);
+            assertEquals(-12000,r.cents);assertEquals("Nome personalizado",r.name);assertEquals("Casa",r.category);
+            assertEquals(TransactionKind.ACCOUNT_EXPENSE,r.kind);assertEquals("merchant:loja",r.categoryKey);
+            assertTrue(r.categoryManual);assertEquals(5,store.getReadableDatabase().getVersion());
         }
     }
 }

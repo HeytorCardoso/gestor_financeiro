@@ -10,14 +10,15 @@ import java.util.HashSet;
 
 /** Valores em centavos. Exclusões e capturas unidas mantêm identidade para não reaparecer. */
 public final class CaptureStore extends SQLiteOpenHelper {
-    public CaptureStore(Context context) { super(context, "captures.db", null, 4); }
+    public CaptureStore(Context context) { super(context, "captures.db", null, 5); }
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE captures (_id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, raw TEXT NOT NULL, name TEXT NOT NULL, cents INTEGER NOT NULL, category TEXT NOT NULL, captured INTEGER NOT NULL, pending INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '', edited INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'Nubank', kind TEXT NOT NULL DEFAULT 'UNKNOWN', counterparty TEXT NOT NULL DEFAULT '')");
+        db.execSQL("CREATE TABLE captures (_id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, raw TEXT NOT NULL, name TEXT NOT NULL, cents INTEGER NOT NULL, category TEXT NOT NULL, captured INTEGER NOT NULL, pending INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '', edited INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'Nubank', kind TEXT NOT NULL DEFAULT 'UNKNOWN', counterparty TEXT NOT NULL DEFAULT '', category_key TEXT NOT NULL DEFAULT '', category_manual INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE INDEX captures_time ON captures(captured)");
         db.execSQL("CREATE TABLE changes (revision INTEGER NOT NULL)");
         db.execSQL("INSERT INTO changes VALUES (0)");
         watch(db, "captures");
         createDecisions(db);
+        createCategoryRules(db);
     }
     private void watch(SQLiteDatabase db, String table) {
         for (String operation : new String[]{"INSERT", "UPDATE", "DELETE"})
@@ -27,6 +28,16 @@ public final class CaptureStore extends SQLiteOpenHelper {
         // status: 1 = união confirmada, 2 = operações diferentes / união desfeita.
         db.execSQL("CREATE TABLE duplicate_decisions (a INTEGER NOT NULL, b INTEGER NOT NULL, status INTEGER NOT NULL, kept_id INTEGER, PRIMARY KEY(a,b))");
         watch(db, "duplicate_decisions");
+    }
+    private void createCategoryRules(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE category_rules (identity TEXT PRIMARY KEY NOT NULL, category TEXT NOT NULL)");
+        watch(db,"category_rules");
+    }
+    private String learnedCategory(SQLiteDatabase db,String key) {
+        if (key.isEmpty()) return "Outros";
+        try(Cursor c=db.query("category_rules",new String[]{"category"},"identity=?",new String[]{key},null,null,null)) {
+            return c.moveToFirst() ? c.getString(0) : "Outros";
+        }
     }
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
@@ -48,6 +59,18 @@ public final class CaptureStore extends SQLiteOpenHelper {
                 }
             }
         }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE captures ADD COLUMN category_key TEXT NOT NULL DEFAULT ''");
+            db.execSQL("ALTER TABLE captures ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0");
+            createCategoryRules(db);
+            try(Cursor c=db.query("captures",new String[]{"_id","raw","source","edited","category"},"pending IN (0,1,3)",null,null,null,null)) {
+                while(c.moveToNext()) {
+                    ContentValues v=new ContentValues();v.put("category_key",CategoryRules.identity(parse(c.getString(2),c.getString(1))));
+                    v.put("category_manual",c.getInt(3)==1 && !c.getString(4).equals("Outros") ? 1 : 0);
+                    db.update("captures",v,"_id=?",new String[]{String.valueOf(c.getLong(0))});
+                }
+            }
+        }
     }
     private NotificationParser.Result parse(String source, String raw) {
         return source.startsWith("Gmail") ? GmailTransferParser.parse("", raw) : NotificationParser.parse(raw);
@@ -65,9 +88,11 @@ public final class CaptureStore extends SQLiteOpenHelper {
         v.put("captured", time); v.put("pending", parsed == null ? 1 : 0);
         v.put("kind", parsed == null ? TransactionKind.UNKNOWN.name() : parsed.kind.name());
         v.put("counterparty", parsed == null ? "" : parsed.counterparty);
+        v.put("category_key",CategoryRules.identity(parsed));
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
+            v.put("category",learnedCategory(db,CategoryRules.identity(parsed)));
             boolean changed = db.insertWithOnConflict("captures", null, v, SQLiteDatabase.CONFLICT_IGNORE) != -1;
             // pending=2 apagado, pending=3 unido: não recriar nem sobrescrever edições.
             if (!changed && parsed != null) changed = db.update("captures", v, "token=? AND edited=0 AND (pending=1 OR (pending=0 AND raw<>?))", new String[]{token, raw}) > 0;
@@ -84,7 +109,7 @@ public final class CaptureStore extends SQLiteOpenHelper {
         } return rows;
     }
     private Record read(Cursor c) {
-        return new Record(c.getLong(c.getColumnIndexOrThrow("_id")), c.getString(c.getColumnIndexOrThrow("name")), c.getLong(c.getColumnIndexOrThrow("cents")), c.getString(c.getColumnIndexOrThrow("category")), c.getString(c.getColumnIndexOrThrow("raw")), c.getLong(c.getColumnIndexOrThrow("captured")), c.getString(c.getColumnIndexOrThrow("notes")), c.getInt(c.getColumnIndexOrThrow("pending")) == 1, c.getString(c.getColumnIndexOrThrow("source")), TransactionKind.fromStorage(c.getString(c.getColumnIndexOrThrow("kind"))), c.getString(c.getColumnIndexOrThrow("counterparty")));
+        return new Record(c.getLong(c.getColumnIndexOrThrow("_id")), c.getString(c.getColumnIndexOrThrow("name")), c.getLong(c.getColumnIndexOrThrow("cents")), c.getString(c.getColumnIndexOrThrow("category")), c.getString(c.getColumnIndexOrThrow("raw")), c.getLong(c.getColumnIndexOrThrow("captured")), c.getString(c.getColumnIndexOrThrow("notes")), c.getInt(c.getColumnIndexOrThrow("pending")) == 1, c.getString(c.getColumnIndexOrThrow("source")), TransactionKind.fromStorage(c.getString(c.getColumnIndexOrThrow("kind"))), c.getString(c.getColumnIndexOrThrow("counterparty")),c.getString(c.getColumnIndexOrThrow("category_key")),c.getInt(c.getColumnIndexOrThrow("category_manual"))==1);
     }
     public void reprocessIncomplete() {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
@@ -95,6 +120,7 @@ public final class CaptureStore extends SQLiteOpenHelper {
                     if (result == null) continue;
                     ContentValues v = new ContentValues(); v.put("name", result.name); v.put("cents", result.cents); v.put("pending", 0);
                     v.put("kind", result.kind.name()); v.put("counterparty", result.counterparty);
+                    String key=CategoryRules.identity(result);v.put("category_key",key);v.put("category",learnedCategory(db,key));
                     db.update("captures", v, "_id=? AND pending=1 AND edited=0", new String[]{String.valueOf(c.getLong(0))});
                 }
             }
@@ -106,13 +132,28 @@ public final class CaptureStore extends SQLiteOpenHelper {
         if (existing.isEmpty()) return;
         edit(id, name, cents, category, notes, existing.get(0).kind, existing.get(0).counterparty);
     }
-    public void edit(long id, String name, long cents, String category, String notes, TransactionKind kind, String counterparty) {
-        if (cents > 0 && kind != TransactionKind.ACCOUNT_TRANSFER && kind != TransactionKind.UNKNOWN)
-            throw new IllegalArgumentException("Receitas devem ser movimentações da conta");
-        ContentValues v = new ContentValues(); v.put("name", name); v.put("cents", cents);
-        v.put("category", category); v.put("notes", notes); v.put("edited", 1); v.put("pending", cents == 0 ? 1 : 0);
-        v.put("kind", kind.name()); v.put("counterparty", counterparty.trim());
-        getWritableDatabase().update("captures", v, "_id=? AND pending IN (0,1)", new String[]{String.valueOf(id)});
+    public void edit(long id,String name,long cents,String category,String notes,TransactionKind kind,String counterparty) {
+        edit(id,name,cents,category,notes,kind,counterparty,true);
+    }
+    public void edit(long id,String name,long cents,String category,String notes,TransactionKind kind,String counterparty,boolean rememberCategory) {
+        if (!CategoryRules.valid(category)) throw new IllegalArgumentException("Categoria inválida");
+        if (cents>0 && kind!=TransactionKind.ACCOUNT_TRANSFER && kind!=TransactionKind.UNKNOWN) throw new IllegalArgumentException("Receitas devem ser movimentações da conta");
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            ArrayList<Record> records=query("_id=? AND pending IN (0,1)",new String[]{String.valueOf(id)});
+            if (records.isEmpty()) return;
+            Record previous=records.get(0);
+            boolean changedCategory=!category.equals(previous.category);
+            ContentValues v=new ContentValues();v.put("name",name);v.put("cents",cents);v.put("category",category);
+            v.put("notes",notes);v.put("edited",1);v.put("pending",cents==0 ? 1 : 0);v.put("kind",kind.name());v.put("counterparty",counterparty.trim());
+            v.put("category_manual",previous.categoryManual || changedCategory ? 1 : 0);
+            db.update("captures",v,"_id=?",new String[]{String.valueOf(id)});
+            if (changedCategory && rememberCategory && !previous.categoryKey.isEmpty()) {
+                ContentValues rule=new ContentValues();rule.put("identity",previous.categoryKey);rule.put("category",category);
+                db.insertWithOnConflict("category_rules",null,rule,SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            db.setTransactionSuccessful();
+        } finally {db.endTransaction();}
     }
     private static String pairKey(long a, long b) { return Math.min(a,b) + ":" + Math.max(a,b); }
     public ArrayList<Duplicate> possibleDuplicates() {
@@ -174,7 +215,7 @@ public final class CaptureStore extends SQLiteOpenHelper {
         } finally { db.endTransaction(); }
     }
     private void clear(SQLiteDatabase db,long id) {
-        ContentValues v = new ContentValues(); v.put("pending",2); v.put("raw",""); v.put("notes",""); v.put("name","Lançamento apagado"); v.put("cents",0); v.put("category","Outros"); v.put("counterparty",""); v.put("kind",TransactionKind.UNKNOWN.name());
+        ContentValues v = new ContentValues(); v.put("pending",2); v.put("raw",""); v.put("notes",""); v.put("name","Lançamento apagado"); v.put("cents",0); v.put("category","Outros"); v.put("counterparty",""); v.put("kind",TransactionKind.UNKNOWN.name());v.put("category_key","");
         db.update("captures",v,"_id=?",new String[]{String.valueOf(id)});
     }
     public static final class Duplicate {
@@ -182,9 +223,9 @@ public final class CaptureStore extends SQLiteOpenHelper {
         Duplicate(Record first,Record second,String reason) { this.first=first; this.second=second; this.reason=reason; }
     }
     public static final class Record {
-        public final long id,cents,time; public final String name,category,raw,notes,source,counterparty; public final boolean incomplete; public final TransactionKind kind;
-        Record(long id,String name,long cents,String category,String raw,long time,String notes,boolean incomplete,String source,TransactionKind kind,String counterparty) {
-            this.id=id; this.name=name; this.cents=cents; this.category=category; this.raw=raw; this.time=time; this.notes=notes; this.incomplete=incomplete; this.source=source; this.kind=kind; this.counterparty=counterparty;
+        public final long id,cents,time; public final String name,category,raw,notes,source,counterparty,categoryKey; public final boolean incomplete,categoryManual; public final TransactionKind kind;
+        Record(long id,String name,long cents,String category,String raw,long time,String notes,boolean incomplete,String source,TransactionKind kind,String counterparty,String categoryKey,boolean categoryManual) {
+            this.categoryKey=categoryKey;this.categoryManual=categoryManual;this.id=id; this.name=name; this.cents=cents; this.category=category; this.raw=raw; this.time=time; this.notes=notes; this.incomplete=incomplete; this.source=source; this.kind=kind; this.counterparty=counterparty;
         }
     }
 }

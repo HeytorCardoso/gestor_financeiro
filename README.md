@@ -36,7 +36,7 @@ A leitura depende do acesso concedido e do conteúdo disponibilizado pelo Androi
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-O código principal e os testes compilaram diretamente com javac; 41 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
+O código principal e os testes compilaram diretamente com javac; 54 testes unitários de extração, classificação, totais e comparação passaram. Os testes instrumentados incluem a composição dos campos Android, reprocessamento de registros salvos, persistência, proteção de edições e exclusão. Esses testes em aparelho e o build APK ainda não foram executados neste ambiente. O Gradle encontrou restrição ao inicializar sockets e a tentativa de iniciar o ADB também foi bloqueada (`Operation not permitted`). A compatibilidade com os textos reais reportados depende da validação no aparelho.
 
 Referência Android: https://developer.android.com/reference/android/app/Notification.html
 
@@ -65,3 +65,21 @@ O banco versão 4 acrescenta natureza, destinatário e decisões de duplicidade 
 O indicador principal **Resultado dos lançamentos** considera todas as receitas e gastos com valor reconhecido, mesmo sem classificação. A movimentação da conta é exibida separadamente e usa somente naturezas conhecidas. Identificar posteriormente uma fatura não muda sua participação no resultado ou nos gastos; apenas detalha a natureza da movimentação. Categorias/orçamentos também incluem despesas ainda sem modalidade. Registros sem valor extraído continuam fora do cálculo.
 
 A regra dos totais usa o sinal do valor, independentemente da natureza ou classificação: todas as entradas somam receitas e todas as saídas somam gastos, inclusive faturas. Registros apagados ou unidos a outro lançamento continuam fora da lista contabilizada. Sem valor conhecido, não há quantia a somar. Não é necessário recapturar os lançamentos existentes para atualizar os totais.
+
+## Categorias que aprendem
+
+Ao alterar a categoria de um lançamento com estabelecimento ou destinatário identificado, **Usar esta categoria nos próximos lançamentos semelhantes** vem marcado. Salvar aprende uma regra local para futuras capturas dessa identidade. É possível desmarcar para fazer uma exceção apenas naquele registro; a regra anterior, se existir, permanece. A última correção com aprendizagem substitui a regra anterior. Editar somente valor, descrição ou observações não ensina outra categoria.
+
+As identidades comparam nomes exatos após normalização de acentos, espaços e pontuação. Uma compra no mesmo estabelecimento pode mudar de valor ou modalidade e usar a mesma categoria. Pix enviado e recebido têm regras independentes, e avisos de saída do Gmail compartilham a identidade com o Nubank. Descrições genéricas sem destinatário/estabelecimento não viram regras globais. Ainda não há aproximação de nomes parecidos ou sugestão baseada em palavras-chave: sem regra, a categoria inicial é Outros.
+
+A regra usa os dados originais identificados, mesmo se a descrição for personalizada. Categorias editadas manualmente são preservadas. Aprender não recategoriza o histórico em massa; vale para capturas seguintes e conclusão de capturas incompletas. A versão 5 do banco acrescenta as regras e identidades, preservando valores, naturezas, observações e categorias existentes; não transforma edições antigas em regras automaticamente.
+
+## Extrato organizado
+
+O extrato agrupa os registros por dia no fuso do aparelho. Pesquisa sem distinção de maiúsculas/acentos em descrição, destinatário, observações, categoria, origem e natureza. Os termos de busca combinam-se com categoria, período e filtros de receitas/despesas, conta, crédito, faturas, itens a classificar ou duplicatas.
+
+Períodos: todo o histórico, hoje, últimos sete dias (hoje + seis dias anteriores), mês atual e intervalo personalizado com calendário Material. O último dia escolhido é incluído até o início do dia seguinte. Pesquisa e filtros sobrevivem à rotação; **Limpar pesquisa e filtros** restaura a visão completa. Os cabeçalhos mostram datas completas; cada registro mantém origem e natureza visíveis.
+
+O extrato exibe quantidade de registros e resultado do conjunto filtrado, mantendo todas as entradas/saídas conhecidas, inclusive faturas e valores sem classificação, conforme a regra de cálculo atual. Os filtros não alteram o resumo geral. Registros apagados e capturas unidas continuam fora dos totais duplicados. A data usada é a de captura da notificação, não a data contábil confirmada pelo banco.
+
+Os 54 testes unitários incluem identidades para categorias, pesquisa, limites de período, conversão UTC do calendário e horário de verão histórico. Os testes instrumentados adicionais cobrem aprendizagem persistente, exceções locais, fontes diferentes, proteção de edições e migração das versões 3 e 4 para 5. Foram compilados; a execução instrumentada e a conferência visual ainda requerem aparelho/emulador fora das restrições deste ambiente.
